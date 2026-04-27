@@ -7,8 +7,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
 #[derive(Parser)]
-#[command(author, version, about = "A Rust port of vnStat", long_about = None)]
+#[command(author, version, about = "A Rust port of vnStat", long_about = None, disable_help_flag = true)]
 struct Cli {
+    /// Show help
+    #[arg(short = '?', long = "help")]
+    help: bool,
+
     /// Select interface
     #[arg(short, long, value_name = "iface")]
     iface: Option<String>,
@@ -352,6 +356,13 @@ fn format_bytes(bytes: u64) -> String {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if cli.help {
+        use clap::CommandFactory;
+        Cli::command().print_help()?;
+        return Ok(());
+    }
+
     let file_config = load_config(&cli.config);
     
     let db_path = cli.dbdir
@@ -412,8 +423,6 @@ async fn main() -> Result<()> {
     }
 
     // Default: Show stats
-    // Note: Original vnstat filters by days, hours, etc. For now we use our existing 'Show' logic
-    // but we can refine it to check cli.days, cli.hours, etc.
     let mut query = "
         SELECT i.hostname, i.name, SUM(t.rx), SUM(t.tx) 
         FROM interface i 
