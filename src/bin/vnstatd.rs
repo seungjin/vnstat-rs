@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
     let file_config = load_config(&cli.config);
     
     let db_path = file_config.database
-        .unwrap_or_else(|| PathBuf::from("vnstat-rs.db"));
+        .unwrap_or_else(|| PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
     
     let url = file_config.url;
     let token = file_config.token;

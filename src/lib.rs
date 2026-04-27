@@ -262,11 +262,12 @@ pub fn load_config(path: &Path) -> Config {
             }
         }
 
+        // Combine DatabaseDir and Database if both are present, or use what's available
         config.database = match (database_dir, database_file) {
             (Some(dir), Some(file)) => Some(dir.join(file)),
             (None, Some(file)) => Some(PathBuf::from(file)),
-            (Some(dir), None) => Some(dir.join("vnstat.db")),
-            (None, None) => None,
+            (Some(dir), None) => Some(dir.join("vnstat-rs.db")),
+            (None, None) => Some(PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db")),
         };
     }
 

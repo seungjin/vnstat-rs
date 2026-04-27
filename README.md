@@ -69,7 +69,7 @@ vnstatd-rs --sync-counters
 
 ## Configuration
 
-By default, the application looks for a configuration file at `/etc/vnstat.conf`.
+By default, the application looks for a configuration file at `/etc/vnstat.conf` and a database at `/var/lib/vnstat-rs/vnstat-rs.db`.
 
 Example `/etc/vnstat.conf`:
 
