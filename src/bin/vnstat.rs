@@ -29,15 +29,15 @@ struct Cli {
     hours: bool,
 
     /// Show daily statistics
-    #[arg(short, long)]
+    #[arg(short = 'd', long)]
     days: bool,
 
     /// Show monthly statistics
-    #[arg(short, long)]
+    #[arg(short = 'm', long)]
     months: bool,
 
     /// Show yearly statistics
-    #[arg(short, long)]
+    #[arg(short = 'y', long)]
     years: bool,
 
     /// Show top 10 days
@@ -113,23 +113,48 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Default: Show stats
-    let mut query = "
-        SELECT i.hostname, i.name, SUM(t.rx), SUM(t.tx) 
-        FROM interface i 
-        JOIN traffic t ON i.id = t.interface_id ".to_string();
-    
-    let mut where_clauses = Vec::new();
+    if cli.hours || cli.days || cli.months || cli.years || cli.top {
+        let table = if cli.hours { "hour" }
+            else if cli.days { "day" }
+            else if cli.months { "month" }
+            else if cli.years { "year" }
+            else { "top" };
+
+        let mut query = format!(
+            "SELECT i.hostname, i.name, t.date, t.rx, t.tx 
+             FROM interface i 
+             JOIN {} t ON i.id = t.interface ", table);
+        
+        if let Some(ref iface) = cli.iface {
+            query.push_str(&format!("WHERE i.name = '{}' ", iface));
+        }
+        query.push_str("ORDER BY t.date DESC LIMIT 30");
+
+        let mut rows = db.conn.query(&query, ()).await?;
+        println!("{:<20} {:<15} {:<20} {:<15} {:<15}", "Host", "Interface", "Date", "RX", "TX");
+        while let Some(row) = rows.next().await? {
+            let host: String = row.get(0)?;
+            let name: String = row.get(1)?;
+            let date: i64 = row.get(2)?;
+            let rx: i64 = row.get(3)?;
+            let tx: i64 = row.get(4)?;
+            // Simple date format for now
+            let date_str = chrono::DateTime::from_timestamp(date, 0)
+                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| date.to_string());
+
+            println!("{:<20} {:<15} {:<20} {:<15} {:<15}", 
+                host, name, date_str, format_bytes(rx as u64), format_bytes(tx as u64));
+        }
+        return Ok(());
+    }
+
+    // Default: Show summary from interface table
+    let mut query = "SELECT hostname, name, rxtotal, txtotal FROM interface".to_string();
     if let Some(ref iface) = cli.iface {
-        where_clauses.push(format!("i.name = '{}'", iface));
+        query.push_str(&format!(" WHERE name = '{}'", iface));
     }
-
-    if !where_clauses.is_empty() {
-        query.push_str(" WHERE ");
-        query.push_str(&where_clauses.join(" AND "));
-    }
-
-    query.push_str(" GROUP BY i.machine_id, i.name ORDER BY i.hostname, i.name");
+    query.push_str(" ORDER BY hostname, name");
 
     let mut rows = db.conn.query(&query, ()).await?;
     

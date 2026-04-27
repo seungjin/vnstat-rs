@@ -89,6 +89,7 @@ async fn main() -> Result<()> {
     let token = file_config.token;
 
     let db = Db::open(db_path, url, token).await?;
+    db.init_schema().await?;
 
     if cli.initdb {
         println!("Initializing database for host: {} ({})", db.hostname, db.machine_id);
