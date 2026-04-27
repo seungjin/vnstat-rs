@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser};
 use libsql::{params, Builder, Connection, Database};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,11 +7,63 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about = "A Rust port of vnStat", long_about = None)]
 struct Cli {
+    /// Select interface
+    #[arg(short, long, value_name = "iface")]
+    iface: Option<String>,
+
+    /// Show hourly statistics
+    #[arg(short = 'h', long)]
+    hours: bool,
+
+    /// Show daily statistics
+    #[arg(short, long)]
+    days: bool,
+
+    /// Show monthly statistics
+    #[arg(short, long)]
+    months: bool,
+
+    /// Show yearly statistics
+    #[arg(short, long)]
+    years: bool,
+
+    /// Show top 10 days
+    #[arg(short, long)]
+    top: bool,
+
+    /// Use short output
+    #[arg(short, long)]
+    short: bool,
+
+    /// Update database
+    #[arg(short, long)]
+    update: bool,
+
+    /// Run as daemon
+    #[arg(long)]
+    daemon: bool,
+
+    /// Sync with remote database
+    #[arg(long)]
+    sync: bool,
+
+    /// Initialize the database
+    #[arg(long)]
+    init: bool,
+
+    /// List interfaces
+    #[arg(long)]
+    iflist: bool,
+
     /// Path to the database file
-    #[arg(short, long, value_name = "FILE")]
-    database: Option<PathBuf>,
+    #[arg(short = 'D', long, value_name = "FILE")]
+    dbdir: Option<PathBuf>,
+
+    /// Path to config file
+    #[arg(long, value_name = "FILE", default_value = "/etc/vnstat.conf")]
+    config: PathBuf,
 
     /// URL for remote libSQL/Turso database
     #[arg(long)]
@@ -21,33 +73,13 @@ struct Cli {
     #[arg(long)]
     token: Option<String>,
 
-    /// Path to config file
-    #[arg(short, long, value_name = "FILE", default_value = "/etc/vnstat.conf")]
-    config: PathBuf,
+    /// Update interval in seconds (for daemon)
+    #[arg(long)]
+    interval: Option<u64>,
 
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Initialize the database
-    Init,
-    /// Update statistics once
-    Update,
-    /// Show statistics
-    Show,
-    /// Sync with remote database
-    Sync,
-    /// Run as a daemon to update statistics periodically
-    Daemon {
-        /// Update interval in seconds
-        #[arg(short, long)]
-        interval: Option<u64>,
-        /// Sync interval in seconds
-        #[arg(long)]
-        sync_interval: Option<u64>,
-    },
+    /// Sync interval in seconds (for daemon)
+    #[arg(long)]
+    sync_interval: Option<u64>,
 }
 
 #[derive(Default, Debug)]
@@ -179,9 +211,14 @@ impl Db {
         Ok(())
     }
 
-    async fn update_stats(&self) -> Result<()> {
+    async fn update_stats(&self, filter_iface: Option<&str>) -> Result<()> {
         let stats = parse_net_dev()?;
         for stat in stats {
+            if let Some(f) = filter_iface {
+                if stat.name != f {
+                    continue;
+                }
+            }
             if let Some((id, last_rx, last_tx)) = self.get_interface(&stat.name).await? {
                 let rx_delta = if stat.rx_bytes >= last_rx {
                     stat.rx_bytes - last_rx
@@ -225,7 +262,6 @@ fn load_config(path: &Path) -> Config {
                 continue;
             }
 
-            // vnStat config uses whitespace as separator
             let parts: Vec<&str> = line.splitn(2, |c: char| c.is_whitespace()).map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
             if parts.len() < 2 {
                 continue;
@@ -249,7 +285,6 @@ fn load_config(path: &Path) -> Config {
             }
         }
 
-        // Combine DatabaseDir and Database if both are present, or use what's available
         config.database = match (database_dir, database_file) {
             (Some(dir), Some(file)) => Some(dir.join(file)),
             (None, Some(file)) => Some(PathBuf::from(file)),
@@ -319,7 +354,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let file_config = load_config(&cli.config);
     
-    let db_path = cli.database
+    let db_path = cli.dbdir
         .or(file_config.database)
         .unwrap_or_else(|| PathBuf::from("vnstat.db"));
     
@@ -328,63 +363,90 @@ async fn main() -> Result<()> {
 
     let db = Db::open(db_path, url, token).await?;
 
-    match cli.command {
-        Some(Commands::Init) | None => {
-            println!("Initializing database for host: {} ({})", db.hostname, db.machine_id);
-            db.init_schema().await?;
-            println!("Database initialized.");
-        }
-        Some(Commands::Update) => {
-            db.update_stats().await?;
-        }
-        Some(Commands::Sync) => {
-            db.sync().await?;
-        }
-        Some(Commands::Daemon { interval, sync_interval }) => {
-            let interval = interval.unwrap_or(file_config.update_interval);
-            let sync_interval = sync_interval.unwrap_or(file_config.sync_interval);
-            
-            println!("Running as daemon (host: {}, update: {}s, sync: {}s)...", db.hostname, interval, sync_interval);
-            let mut last_sync = SystemTime::now();
-            loop {
-                if let Err(e) = db.update_stats().await {
-                    eprintln!("Error updating stats: {}", e);
-                }
-                
-                if last_sync.elapsed()?.as_secs() >= sync_interval {
-                    if let Err(e) = db.sync().await {
-                        eprintln!("Error syncing: {}", e);
-                    }
-                    last_sync = SystemTime::now();
-                }
+    if cli.init {
+        println!("Initializing database for host: {} ({})", db.hostname, db.machine_id);
+        db.init_schema().await?;
+        println!("Database initialized.");
+        return Ok(());
+    }
 
-                sleep(Duration::from_secs(interval)).await;
+    if cli.update {
+        db.update_stats(cli.iface.as_deref()).await?;
+        return Ok(());
+    }
+
+    if cli.sync {
+        db.sync().await?;
+        return Ok(());
+    }
+
+    if cli.daemon {
+        let interval = cli.interval.unwrap_or(file_config.update_interval);
+        let sync_interval = cli.sync_interval.unwrap_or(file_config.sync_interval);
+        
+        println!("Running as daemon (host: {}, update: {}s, sync: {}s)...", db.hostname, interval, sync_interval);
+        let mut last_sync = SystemTime::now();
+        loop {
+            if let Err(e) = db.update_stats(None).await {
+                eprintln!("Error updating stats: {}", e);
             }
-        }
-        Some(Commands::Show) => {
-            let mut rows = db.conn.query("
-                SELECT i.hostname, i.name, SUM(t.rx), SUM(t.tx) 
-                FROM interface i 
-                JOIN traffic t ON i.id = t.interface_id 
-                GROUP BY i.machine_id, i.name
-                ORDER BY i.hostname, i.name", ()).await?;
             
-            println!("{:<20} {:<15} {:<15} {:<15} {:<15}", "Host", "Interface", "Total RX", "Total TX", "Total");
-            while let Some(row) = rows.next().await? {
-                let host: String = row.get(0)?;
-                let name: String = row.get(1)?;
-                let rx: i64 = row.get(2)?;
-                let tx: i64 = row.get(3)?;
-                let total = rx + tx;
-                println!("{:<20} {:<15} {:<15} {:<15} {:<15}", 
-                    host,
-                    name, 
-                    format_bytes(rx as u64), 
-                    format_bytes(tx as u64), 
-                    format_bytes(total as u64)
-                );
+            if last_sync.elapsed()?.as_secs() >= sync_interval {
+                if let Err(e) = db.sync().await {
+                    eprintln!("Error syncing: {}", e);
+                }
+                last_sync = SystemTime::now();
             }
+
+            sleep(Duration::from_secs(interval)).await;
         }
+    }
+
+    if cli.iflist {
+        let stats = parse_net_dev()?;
+        println!("{:<15} {:<15} {:<15}", "Interface", "RX Total", "TX Total");
+        for s in stats {
+            println!("{:<15} {:<15} {:<15}", s.name, format_bytes(s.rx_bytes), format_bytes(s.tx_bytes));
+        }
+        return Ok(());
+    }
+
+    // Default: Show stats
+    // Note: Original vnstat filters by days, hours, etc. For now we use our existing 'Show' logic
+    // but we can refine it to check cli.days, cli.hours, etc.
+    let mut query = "
+        SELECT i.hostname, i.name, SUM(t.rx), SUM(t.tx) 
+        FROM interface i 
+        JOIN traffic t ON i.id = t.interface_id ".to_string();
+    
+    let mut where_clauses = Vec::new();
+    if let Some(ref iface) = cli.iface {
+        where_clauses.push(format!("i.name = '{}'", iface));
+    }
+
+    if !where_clauses.is_empty() {
+        query.push_str(" WHERE ");
+        query.push_str(&where_clauses.join(" AND "));
+    }
+
+    query.push_str(" GROUP BY i.machine_id, i.name ORDER BY i.hostname, i.name");
+
+    let mut rows = db.conn.query(&query, ()).await?;
+    
+    println!("{:<20} {:<15} {:<15} {:<15} {:<15}", "Host", "Interface", "Total RX", "Total TX", "Total");
+    while let Some(row) = rows.next().await? {
+        let host: String = row.get(0)?;
+        let name: String = row.get(1)?;
+        let rx: i64 = row.get(2)?;
+        let tx: i64 = row.get(3)?;
+        let total = rx + tx;
+        println!("{:<20} {:<15} {:<15} {:<15} {:<15}", 
+            host,
+            name, 
+            format_bytes(rx as u64), 
+            format_bytes(tx as u64), 
+            format_bytes(total as u64)
+        );
     }
 
     Ok(())

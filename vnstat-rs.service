@@ -7,7 +7,7 @@ Type=simple
 User=vnstat
 Group=vnstat
 WorkingDirectory=/var/lib/vnstat-rs
-ExecStart=/usr/local/bin/vnstat-rs daemon
+ExecStart=/usr/local/bin/vnstat-rs --daemon
 Restart=always
 
 [Install]

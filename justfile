@@ -14,19 +14,19 @@ run *args:
 
 # Initialize the database
 init:
-    cargo run -- init
+    cargo run -- --init
 
 # Update statistics once
 update:
-    cargo run -- update
+    cargo run -- -u
 
 # Show statistics
 show:
-    cargo run -- show
+    cargo run --
 
 # Run as a daemon
 daemon:
-    cargo run -- daemon
+    cargo run -- --daemon
 
 # Install the binary to /usr/local/bin
 install: release

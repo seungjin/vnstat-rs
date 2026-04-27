@@ -22,27 +22,33 @@ cargo build --release
 
 ### Initialize the database
 ```bash
-vnstat-rs init
+vnstat-rs --init
 ```
 
 ### Update statistics once
 ```bash
-vnstat-rs update
+vnstat-rs -u
 ```
 
 ### Show statistics
 ```bash
-vnstat-rs show
+vnstat-rs
+vnstat-rs -i eth0
 ```
 
 ### Sync with remote database
 ```bash
-vnstat-rs --url <URL> --token <TOKEN> sync
+vnstat-rs --url <URL> --token <TOKEN> --sync
 ```
 
 ### Run as a daemon
 ```bash
-vnstat-rs daemon --interval 30 --sync-interval 300
+vnstat-rs --daemon --interval 30 --sync-interval 300
+```
+
+### List interfaces
+```bash
+vnstat-rs --iflist
 ```
 
 ## Systemd Service
