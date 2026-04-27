@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
     }
 
     if cli.version {
-        println!("vnStatd-rs {} by Seungjin Kim (libSQL 0.6.0)", env!("CARGO_PKG_VERSION"));
+        println!("vnStatd-rs {} by Seungjin Kim (libSQL 0.9.30)", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 

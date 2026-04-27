@@ -40,9 +40,14 @@ impl Db {
         
         let db = if let (Some(url), Some(token)) = (url, token) {
             println!("Opening remote replica at {}...", url);
-            Builder::new_remote_replica(path_str, url, token)
+            let db = Builder::new_remote_replica(path_str, url, token)
                 .build()
-                .await?
+                .await?;
+            println!("Initial sync...");
+            if let Err(e) = db.sync().await {
+                eprintln!("Warning: Initial sync failed: {}", e);
+            }
+            db
         } else {
             Builder::new_local(&path_str).build().await?
         };
