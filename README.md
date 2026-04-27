@@ -14,6 +14,7 @@ Following the original vnStat architecture, this project provides two binaries:
 - **Multi-host Support**: Identifies hosts using a unique `machine-id` (from `/etc/machine-id`) and hostname, allowing multiple instances to report to a centralized server.
 - **Remote Sync**: Supports syncing local statistics with a remote libSQL/Turso database (handled by the daemon).
 - **Human-readable Output**: Displays statistics in KiB, MiB, GiB, etc.
+- **CLI Compatibility**: Command-line arguments designed to match the original `vnstat` and `vnstatd`.
 
 ## Installation
 
@@ -25,35 +26,50 @@ sudo cp target/release/vnstatd-rs /usr/local/bin/
 
 ## Usage
 
-### Initialize the database
-```bash
-vnstat-rs --init
-```
+### vnstat-rs (Client)
 
-### Update statistics once (one-shot)
 ```bash
-vnstat-rs -u
-```
+# Show daily statistics
+vnstat-rs -d
 
-### Show statistics
-```bash
-vnstat-rs
+# Show hourly statistics
+vnstat-rs -h
+
+# Select a specific interface
 vnstat-rs -i eth0
-```
 
-### List interfaces
-```bash
+# Update the database (one-shot update)
+vnstat-rs -u
+
+# Initialize the database
+vnstat-rs --init
+
+# List available interfaces
 vnstat-rs --iflist
+
+# Show help
+vnstat-rs -?
 ```
 
-### Run the daemon
+### vnstatd-rs (Daemon)
+
 ```bash
-vnstatd-rs
+# Start the daemon in the foreground
+vnstatd-rs -n
+
+# Initialize the database and exit
+vnstatd-rs --initdb
+
+# Use a specific configuration file
+vnstatd-rs --config /path/to/vnstat.conf
+
+# Synchronize internal counters (useful after reboot)
+vnstatd-rs --sync-counters
 ```
 
 ## Configuration
 
-By default, the application looks for a configuration file at `/etc/vnstat.conf`. You can specify a different path using the `--config` flag.
+By default, the application looks for a configuration file at `/etc/vnstat.conf`.
 
 Example `/etc/vnstat.conf`:
 
@@ -64,7 +80,7 @@ DatabaseDir "/var/lib/vnstat-rs"
 # database file name
 Database "vnstat.db"
 
-# Remote libSQL/Turso configuration
+# Remote libSQL/Turso configuration (libSQL-rs specific)
 LibsqlUrl "libsql://your-db-name.turso.io"
 LibsqlToken "your-auth-token"
 
