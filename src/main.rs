@@ -7,11 +7,21 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
 #[derive(Parser)]
-#[command(author, version, about = "A Rust port of vnStat", long_about = None, disable_help_flag = true)]
+#[command(
+    author, 
+    about = "A Rust port of vnStat", 
+    long_about = None, 
+    disable_help_flag = true,
+    disable_version_flag = true
+)]
 struct Cli {
     /// Show help
     #[arg(short = '?', long = "help")]
     help: bool,
+
+    /// Print version
+    #[arg(short = 'V', long = "version")]
+    version: bool,
 
     /// Select interface
     #[arg(short, long, value_name = "iface")]
@@ -360,6 +370,11 @@ async fn main() -> Result<()> {
     if cli.help {
         use clap::CommandFactory;
         Cli::command().print_help()?;
+        return Ok(());
+    }
+
+    if cli.version {
+        println!("vnStat-rs {} by Seungjin Kim (libSQL 0.6.0)", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 
