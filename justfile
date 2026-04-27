@@ -38,10 +38,11 @@ setup-service:
     sudo useradd -r -s /sbin/nologin vnstat || true
     sudo mkdir -p /var/lib/vnstat-rs
     sudo chown vnstat:vnstat /var/lib/vnstat-rs
-    sudo cp vnstat-rs.service /etc/systemd/system/vnstatd-rs.service
+    sudo cp vnstat.conf-sample /etc/vnstat-rs.conf
+    sudo cp vnstatd-rs.service /etc/systemd/system/vnstatd-rs.service
     sudo systemctl daemon-reload
     sudo systemctl enable vnstatd-rs
-    @echo "Service installed. Use 'sudo systemctl start vnstatd-rs' to start."
+    @echo "Service and config installed. Edit /etc/vnstat-rs.conf then run 'sudo systemctl start vnstatd-rs'."
 
 # Clean build artifacts
 clean:

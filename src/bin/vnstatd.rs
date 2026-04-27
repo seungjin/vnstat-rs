@@ -44,7 +44,7 @@ struct Cli {
     group: Option<String>,
 
     /// Use specific configuration file
-    #[arg(long, value_name = "file", default_value = "/etc/vnstat.conf")]
+    #[arg(long, value_name = "file", default_value = "/etc/vnstat-rs.conf")]
     config: PathBuf,
 
     /// Initialize database and exit
