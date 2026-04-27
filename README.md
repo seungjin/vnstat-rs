@@ -78,7 +78,7 @@ Example `/etc/vnstat.conf`:
 DatabaseDir "/var/lib/vnstat-rs"
 
 # database file name
-Database "vnstat.db"
+Database "vnstat-rs.db"
 
 # Remote libSQL/Turso configuration (libSQL-rs specific)
 LibsqlUrl "libsql://your-db-name.turso.io"

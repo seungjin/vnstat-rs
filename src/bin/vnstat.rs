@@ -88,7 +88,7 @@ async fn main() -> Result<()> {
     
     let db_path = cli.dbdir
         .or(file_config.database)
-        .unwrap_or_else(|| PathBuf::from("vnstat.db"));
+        .unwrap_or_else(|| PathBuf::from("vnstat-rs.db"));
     
     let db = Db::open(db_path, None, None).await?;
 

@@ -10,6 +10,9 @@
 # location of the database directory
 ;DatabaseDir "/var/lib/vnstat"
 
+# database file name
+;Database "vnstat-rs.db"
+
 # locale (LC_ALL) ("-" = use system locale)
 ;Locale "-"
 
