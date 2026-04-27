@@ -62,9 +62,27 @@ A systemd service file is provided in `vnstat-rs.service`. To install it:
 
 ## Configuration
 
-Environment variables can be used for remote synchronization:
-- `LIBSQL_URL`: The URL of your libSQL/Turso database.
-- `LIBSQL_TOKEN`: The authentication token for the database.
+By default, the application looks for a configuration file at `/etc/vnstat.conf`. You can specify a different path using the `-c` or `--config` flag.
+
+Example `/etc/vnstat.conf`:
+
+```conf
+# location of the database directory
+DatabaseDir "/var/lib/vnstat-rs"
+
+# database file name
+Database "vnstat.db"
+
+# Remote libSQL/Turso configuration
+LibsqlUrl "libsql://your-db-name.turso.io"
+LibsqlToken "your-auth-token"
+
+# Intervals in seconds
+UpdateInterval 30
+SyncInterval 300
+```
+
+Note: CLI arguments always override configuration file values. Environment variables are not used for configuration.
 
 ## License
 

@@ -28,6 +28,20 @@ show:
 daemon:
     cargo run -- daemon
 
+# Install the binary to /usr/local/bin
+install: release
+    sudo cp target/release/vnstat-rs /usr/local/bin/
+
+# Setup systemd service and data directory
+setup-service:
+    sudo useradd -r -s /sbin/nologin vnstat || true
+    sudo mkdir -p /var/lib/vnstat-rs
+    sudo chown vnstat:vnstat /var/lib/vnstat-rs
+    sudo cp vnstat-rs.service /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable vnstat-rs
+    @echo "Service installed. Use 'sudo systemctl start vnstat-rs' to start."
+
 # Clean build artifacts
 clean:
     cargo clean

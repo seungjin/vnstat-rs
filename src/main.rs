@@ -2,21 +2,28 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use libsql::{params, Builder, Connection, Database};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    #[arg(short, long, value_name = "FILE", default_value = "vnstat.db")]
-    database: PathBuf,
+    /// Path to the database file
+    #[arg(short, long, value_name = "FILE")]
+    database: Option<PathBuf>,
 
-    #[arg(long, env = "LIBSQL_URL")]
+    /// URL for remote libSQL/Turso database
+    #[arg(long)]
     url: Option<String>,
 
-    #[arg(long, env = "LIBSQL_TOKEN")]
+    /// Token for remote libSQL/Turso database
+    #[arg(long)]
     token: Option<String>,
+
+    /// Path to config file
+    #[arg(short, long, value_name = "FILE", default_value = "/etc/vnstat.conf")]
+    config: PathBuf,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -34,11 +41,22 @@ enum Commands {
     Sync,
     /// Run as a daemon to update statistics periodically
     Daemon {
-        #[arg(short, long, default_value = "30")]
-        interval: u64,
-        #[arg(long, default_value = "300")]
-        sync_interval: u64,
+        /// Update interval in seconds
+        #[arg(short, long)]
+        interval: Option<u64>,
+        /// Sync interval in seconds
+        #[arg(long)]
+        sync_interval: Option<u64>,
     },
+}
+
+#[derive(Default, Debug)]
+struct Config {
+    database: Option<PathBuf>,
+    url: Option<String>,
+    token: Option<String>,
+    update_interval: u64,
+    sync_interval: u64,
 }
 
 struct Db {
@@ -190,6 +208,59 @@ impl Db {
     }
 }
 
+fn load_config(path: &Path) -> Config {
+    let mut config = Config {
+        update_interval: 30,
+        sync_interval: 300,
+        ..Default::default()
+    };
+
+    if let Ok(content) = fs::read_to_string(path) {
+        let mut database_dir: Option<PathBuf> = None;
+        let mut database_file: Option<String> = None;
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+                continue;
+            }
+
+            // vnStat config uses whitespace as separator
+            let parts: Vec<&str> = line.splitn(2, |c: char| c.is_whitespace()).map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+            if parts.len() < 2 {
+                continue;
+            }
+
+            let key = parts[0];
+            let value = parts[1].trim_matches('"');
+
+            match key {
+                "DatabaseDir" => database_dir = Some(PathBuf::from(value)),
+                "Database" => database_file = Some(value.to_string()),
+                "LibsqlUrl" => config.url = Some(value.to_string()),
+                "LibsqlToken" => config.token = Some(value.to_string()),
+                "UpdateInterval" => {
+                    if let Ok(v) = value.parse() { config.update_interval = v; }
+                }
+                "SyncInterval" => {
+                    if let Ok(v) = value.parse() { config.sync_interval = v; }
+                }
+                _ => {}
+            }
+        }
+
+        // Combine DatabaseDir and Database if both are present, or use what's available
+        config.database = match (database_dir, database_file) {
+            (Some(dir), Some(file)) => Some(dir.join(file)),
+            (None, Some(file)) => Some(PathBuf::from(file)),
+            (Some(dir), None) => Some(dir.join("vnstat.db")),
+            (None, None) => None,
+        };
+    }
+
+    config
+}
+
 fn get_machine_id() -> Result<String> {
     if let Ok(id) = fs::read_to_string("/etc/machine-id") {
         return Ok(id.trim().to_string());
@@ -246,8 +317,16 @@ fn format_bytes(bytes: u64) -> String {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let file_config = load_config(&cli.config);
     
-    let db = Db::open(cli.database, cli.url, cli.token).await?;
+    let db_path = cli.database
+        .or(file_config.database)
+        .unwrap_or_else(|| PathBuf::from("vnstat.db"));
+    
+    let url = cli.url.or(file_config.url);
+    let token = cli.token.or(file_config.token);
+
+    let db = Db::open(db_path, url, token).await?;
 
     match cli.command {
         Some(Commands::Init) | None => {
@@ -262,6 +341,9 @@ async fn main() -> Result<()> {
             db.sync().await?;
         }
         Some(Commands::Daemon { interval, sync_interval }) => {
+            let interval = interval.unwrap_or(file_config.update_interval);
+            let sync_interval = sync_interval.unwrap_or(file_config.sync_interval);
+            
             println!("Running as daemon (host: {}, update: {}s, sync: {}s)...", db.hostname, interval, sync_interval);
             let mut last_sync = SystemTime::now();
             loop {
