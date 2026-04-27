@@ -181,6 +181,19 @@
 ;UseUTC 0
 
 
+# libSQL / Turso synchronization (vnStat-rs specific)
+##
+
+# URL for remote libSQL/Turso database
+;LibsqlUrl ""
+
+# Token for remote libSQL/Turso database
+;LibsqlToken ""
+
+# how often (in seconds) data is synced with remote (0 = sync disabled)
+;SyncInterval 300
+
+
 # vnstati
 ##
 
