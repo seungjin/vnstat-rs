@@ -29,6 +29,13 @@ pub struct Config {
 
 impl Db {
     pub async fn open(path: PathBuf, url: Option<String>, token: Option<String>) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            if !parent.exists() {
+                println!("Creating database directory {}...", parent.display());
+                fs::create_dir_all(parent).context("Failed to create database directory")?;
+            }
+        }
+
         let path_str = path.to_string_lossy().to_string();
         
         let db = if let (Some(url), Some(token)) = (url, token) {
