@@ -12,3 +12,11 @@ anyhow = "1.0"
 clap = { version = "4.5", features = ["derive", "env"] }
 futures = "0.3"
 hostname = "0.4"
+
+[[bin]]
+name = "vnstat-rs"
+path = "src/bin/vnstat.rs"
+
+[[bin]]
+name = "vnstatd-rs"
+path = "src/bin/vnstatd.rs"

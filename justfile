@@ -14,33 +14,34 @@ run *args:
 
 # Initialize the database
 init:
-    cargo run -- --init
+    cargo run --bin vnstat-rs -- --init
 
 # Update statistics once
 update:
-    cargo run -- -u
+    cargo run --bin vnstat-rs -- -u
 
 # Show statistics
 show:
-    cargo run --
+    cargo run --bin vnstat-rs --
 
-# Run as a daemon
+# Run the daemon
 daemon:
-    cargo run -- --daemon
+    cargo run --bin vnstatd-rs
 
-# Install the binary to /usr/local/bin
+# Install the binaries to /usr/local/bin
 install: release
     sudo cp target/release/vnstat-rs /usr/local/bin/
+    sudo cp target/release/vnstatd-rs /usr/local/bin/
 
 # Setup systemd service and data directory
 setup-service:
     sudo useradd -r -s /sbin/nologin vnstat || true
     sudo mkdir -p /var/lib/vnstat-rs
     sudo chown vnstat:vnstat /var/lib/vnstat-rs
-    sudo cp vnstat-rs.service /etc/systemd/system/
+    sudo cp vnstat-rs.service /etc/systemd/system/vnstatd-rs.service
     sudo systemctl daemon-reload
-    sudo systemctl enable vnstat-rs
-    @echo "Service installed. Use 'sudo systemctl start vnstat-rs' to start."
+    sudo systemctl enable vnstatd-rs
+    @echo "Service installed. Use 'sudo systemctl start vnstatd-rs' to start."
 
 # Clean build artifacts
 clean:
