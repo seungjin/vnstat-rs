@@ -2503,6 +2503,8 @@ dependencies = [
  "futures",
  "hostname",
  "openssl",
+ "serde",
+ "serde_json",
  "tokio",
  "turso",
 ]

@@ -1,7 +1,21 @@
 use anyhow::{Result};
 use clap::{Parser};
 use std::path::{PathBuf};
-use vnstat_rs::{Db, load_config, parse_net_dev, format_bytes};
+use tokio::net::UnixStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use vnstat_rs::{Db, load_config, parse_net_dev, format_bytes, IpcRequest, IpcResponse};
+
+async fn request_daemon(socket_path: &PathBuf, req: IpcRequest) -> Result<IpcResponse> {
+    let mut stream = UnixStream::connect(socket_path).await?;
+    let req_json = serde_json::to_vec(&req)?;
+    stream.write_all(&req_json).await?;
+    
+    let mut response_buffer = Vec::new();
+    stream.read_to_end(&mut response_buffer).await?;
+    
+    let resp: IpcResponse = serde_json::from_slice(&response_buffer)?;
+    Ok(resp)
+}
 
 #[derive(Parser)]
 #[command(
@@ -85,12 +99,78 @@ async fn main() -> Result<()> {
     }
 
     let file_config = load_config(&cli.config);
+
+    // Try to talk to daemon first
+    if let Some(ref socket_path) = file_config.daemon_socket {
+        if socket_path.exists() {
+            let req = if cli.hours || cli.days || cli.months || cli.years || cli.top {
+                let table = if cli.hours { "hour" }
+                    else if cli.days { "day" }
+                    else if cli.months { "month" }
+                    else if cli.years { "year" }
+                    else { "top" };
+                Some(IpcRequest::GetHistory { 
+                    table: table.to_string(), 
+                    interface: cli.iface.clone(), 
+                    limit: 30 
+                })
+            } else if !cli.update && !cli.init && !cli.iflist {
+                Some(IpcRequest::GetStats { interface: cli.iface.clone() })
+            } else {
+                None
+            };
+
+            if let Some(req) = req {
+                match request_daemon(socket_path, req).await {
+                    Ok(IpcResponse::Stats(stats)) => {
+                        println!("{:<20} {:<15} {:<15} {:<15} {:<15}", "Host", "Interface", "Total RX", "Total TX", "Total");
+                        for s in stats {
+                            let total = s.rx_bytes + s.tx_bytes;
+                            println!("{:<20} {:<15} {:<15} {:<15} {:<15}", 
+                                file_config.url.as_deref().unwrap_or("local"), // Host is tricky over IPC without Info call
+                                s.name, 
+                                format_bytes(s.rx_bytes), 
+                                format_bytes(s.tx_bytes), 
+                                format_bytes(total)
+                            );
+                        }
+                        return Ok(());
+                    }
+                    Ok(IpcResponse::History(history)) => {
+                        println!("{:<20} {:<15} {:<20} {:<15} {:<15}", "Host", "Interface", "Date", "RX", "TX");
+                        for entry in history {
+                            let date_str = chrono::DateTime::from_timestamp(entry.date, 0)
+                                .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                                .unwrap_or_else(|| entry.date.to_string());
+
+                            println!("{:<20} {:<15} {:<20} {:<15} {:<15}", 
+                                entry.hostname, entry.interface, date_str, format_bytes(entry.rx), format_bytes(entry.tx));
+                        }
+                        return Ok(());
+                    }
+                    Ok(IpcResponse::Error(e)) => {
+                        eprintln!("Daemon error: {}", e);
+                        // Fallback to direct DB access
+                    }
+                    _ => { /* fallback */ }
+                }
+            }
+        }
+    }
     
     let db_path = cli.dbdir
         .or(file_config.database)
         .unwrap_or_else(|| PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
     
-    let db = Db::open(db_path, None, None).await?;
+    let db = match Db::open(db_path, None, None).await {
+        Ok(db) => db,
+        Err(e) => {
+            if e.to_string().contains("locked") {
+                return Err(anyhow::anyhow!("Database is locked by another process (likely vnstatd-rs).\nTry starting the daemon or stopping it if you want direct access."));
+            }
+            return Err(e);
+        }
+    };
 
     if cli.init {
         println!("Initializing database for host: {} ({})", db.hostname, db.machine_id);

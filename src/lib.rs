@@ -15,7 +15,7 @@ pub struct Db {
     pub machine_id: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct InterfaceStats {
     pub name: String,
     pub rx_bytes: u64,
@@ -29,6 +29,31 @@ pub struct Config {
     pub token: Option<String>,
     pub update_interval: u64,
     pub sync_interval: u64,
+    pub daemon_socket: Option<PathBuf>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub enum IpcRequest {
+    GetStats { interface: Option<String> },
+    GetHistory { table: String, interface: Option<String>, limit: usize },
+    GetInfo,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub enum IpcResponse {
+    Stats(Vec<InterfaceStats>),
+    History(Vec<HistoryEntry>),
+    Info { hostname: String, machine_id: String },
+    Error(String),
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct HistoryEntry {
+    pub hostname: String,
+    pub interface: String,
+    pub date: i64,
+    pub rx: u64,
+    pub tx: u64,
 }
 
 impl Db {
@@ -241,6 +266,49 @@ impl Db {
         }
         Ok(())
     }
+
+    pub async fn get_all_interface_stats(&self, filter_iface: Option<&str>) -> Result<Vec<InterfaceStats>> {
+        let mut query = "SELECT name, rxtotal, txtotal FROM interface".to_string();
+        if let Some(iface) = filter_iface {
+            query.push_str(&format!(" WHERE name = '{}'", iface));
+        }
+        
+        let mut rows = self.conn.query(&query, ()).await?;
+        let mut stats = Vec::new();
+        while let Some(row) = rows.next().await? {
+            stats.push(InterfaceStats {
+                name: row.get(0)?,
+                rx_bytes: row.get::<i64>(1)? as u64,
+                tx_bytes: row.get::<i64>(2)? as u64,
+            });
+        }
+        Ok(stats)
+    }
+
+    pub async fn get_history(&self, table: &str, filter_iface: Option<&str>, limit: usize) -> Result<Vec<HistoryEntry>> {
+        let mut query = format!(
+            "SELECT i.hostname, i.name, t.date, t.rx, t.tx 
+             FROM interface i 
+             JOIN {} t ON i.id = t.interface ", table);
+        
+        if let Some(iface) = filter_iface {
+            query.push_str(&format!("WHERE i.name = '{}' ", iface));
+        }
+        query.push_str(&format!("ORDER BY t.date DESC LIMIT {}", limit));
+
+        let mut rows = self.conn.query(&query, ()).await?;
+        let mut history = Vec::new();
+        while let Some(row) = rows.next().await? {
+            history.push(HistoryEntry {
+                hostname: row.get(0)?,
+                interface: row.get(1)?,
+                date: row.get(2)?,
+                rx: row.get::<i64>(3)? as u64,
+                tx: row.get::<i64>(4)? as u64,
+            });
+        }
+        Ok(history)
+    }
 }
 
 pub fn load_config(path: &Path) -> Config {
@@ -279,6 +347,7 @@ pub fn load_config(path: &Path) -> Config {
                 "SyncInterval" => {
                     if let Ok(v) = value.parse() { config.sync_interval = v; }
                 }
+                "DaemonSocket" => config.daemon_socket = Some(PathBuf::from(value)),
                 _ => {}
             }
         }
@@ -290,6 +359,10 @@ pub fn load_config(path: &Path) -> Config {
             (Some(dir), None) => Some(dir.join("vnstat-rs.db")),
             (None, None) => Some(PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db")),
         };
+
+        if config.daemon_socket.is_none() {
+            config.daemon_socket = Some(PathBuf::from("/var/run/vnstat-rs.sock"));
+        }
     }
 
     config

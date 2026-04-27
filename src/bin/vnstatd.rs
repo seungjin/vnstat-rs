@@ -1,10 +1,13 @@
-use anyhow::{Result};
+use anyhow::{Result, Context};
 use clap::{Parser};
 use std::path::{PathBuf};
 use std::time::SystemTime;
 use tokio::time::sleep;
 use std::time::Duration;
-use vnstat_rs::{Db, load_config};
+use std::sync::Arc;
+use tokio::net::UnixListener;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use vnstat_rs::{Db, load_config, IpcRequest, IpcResponse};
 
 #[derive(Parser)]
 #[command(
@@ -103,11 +106,64 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let db = Arc::new(db);
     let interval = cli.interval.unwrap_or(file_config.update_interval);
     let sync_interval = cli.sync_interval.unwrap_or(file_config.sync_interval);
+    let socket_path = file_config.daemon_socket.clone().unwrap_or_else(|| PathBuf::from("/var/run/vnstat-rs.sock"));
     
     println!("vnStatd-rs {} starting (update: {}s, sync: {}s)...", env!("CARGO_PKG_VERSION"), interval, sync_interval);
     
+    // Start IPC server
+    if socket_path.exists() {
+        let _ = std::fs::remove_file(&socket_path);
+    }
+    
+    let listener = UnixListener::bind(&socket_path).context("Failed to bind Unix socket")?;
+    let db_for_ipc = Arc::clone(&db);
+    
+    tokio::spawn(async move {
+        println!("IPC server listening on {}...", socket_path.display());
+        loop {
+            match listener.accept().await {
+                Ok((mut socket, _)) => {
+                    let db = Arc::clone(&db_for_ipc);
+                    tokio::spawn(async move {
+                        let mut buffer = [0u8; 4096];
+                        match socket.read(&mut buffer).await {
+                            Ok(n) if n > 0 => {
+                                let req: Result<IpcRequest, _> = serde_json::from_slice(&buffer[..n]);
+                                let resp = match req {
+                                    Ok(IpcRequest::GetStats { interface }) => {
+                                        match db.get_all_interface_stats(interface.as_deref()).await {
+                                            Ok(stats) => IpcResponse::Stats(stats),
+                                            Err(e) => IpcResponse::Error(e.to_string()),
+                                        }
+                                    }
+                                    Ok(IpcRequest::GetHistory { table, interface, limit }) => {
+                                        match db.get_history(&table, interface.as_deref(), limit).await {
+                                            Ok(history) => IpcResponse::History(history),
+                                            Err(e) => IpcResponse::Error(e.to_string()),
+                                        }
+                                    }
+                                    Ok(IpcRequest::GetInfo) => {
+                                        IpcResponse::Info {
+                                            hostname: db.hostname.clone(),
+                                            machine_id: db.machine_id.clone(),
+                                        }
+                                    }
+                                    Err(e) => IpcResponse::Error(format!("Invalid request: {}", e)),
+                                };
+                                let _ = socket.write_all(&serde_json::to_vec(&resp).unwrap()).await;
+                            }
+                            _ => {}
+                        }
+                    });
+                }
+                Err(e) => eprintln!("IPC accept error: {}", e),
+            }
+        }
+    });
+
     let mut last_sync = SystemTime::now();
     loop {
         if let Err(e) = db.update_stats(None).await {

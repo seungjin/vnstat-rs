@@ -196,6 +196,9 @@
 # how often (in seconds) data is synced with remote (0 = sync disabled)
 ;SyncInterval 300
 
+# Path to Unix Domain Socket for IPC
+;DaemonSocket "/var/run/vnstat-rs.sock"
+
 
 # vnstati
 ##
