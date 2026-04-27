@@ -80,7 +80,7 @@ async fn main() -> Result<()> {
     }
 
     if cli.version {
-        println!("vnStat-rs {} by Seungjin Kim (libSQL 0.9.30)", env!("CARGO_PKG_VERSION"));
+        println!("vnStat-rs {} by Seungjin Kim (Turso {})", env!("CARGO_PKG_VERSION"), env!("TURSO_VERSION"));
         return Ok(());
     }
 

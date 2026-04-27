@@ -1,6 +1,6 @@
 # vnstat-rs
 
-A Rust port of [vnStat](https://github.com/vergoh/vnstat) using [libSQL](https://github.com/tursodatabase/libsql) for SQLite storage and remote synchronization.
+A Rust port of [vnStat](https://github.com/vergoh/vnstat) using [Turso](https://github.com/tursodatabase/turso) for SQLite storage and remote synchronization.
 
 Following the original vnStat architecture, this project provides two binaries:
 - `vnstat-rs`: The CLI client for querying statistics.
@@ -10,9 +10,9 @@ Following the original vnStat architecture, this project provides two binaries:
 
 - **Traffic Monitoring**: Reads network traffic statistics from `/proc/net/dev`.
 - **Delta Calculation**: Stores only the differences between updates, handling counter resets (e.g., after reboots).
-- **libSQL Integration**: Uses libSQL for robust local storage.
+- **Turso Integration**: Uses Turso for robust local storage.
 - **Multi-host Support**: Identifies hosts using a unique `machine-id` (from `/etc/machine-id`) and hostname, allowing multiple instances to report to a centralized server.
-- **Remote Sync**: Supports syncing local statistics with a remote libSQL/Turso database (handled by the daemon).
+- **Remote Sync**: Supports syncing local statistics with a remote Turso database (handled by the daemon).
 - **Human-readable Output**: Displays statistics in KiB, MiB, GiB, etc.
 - **CLI Compatibility**: Command-line arguments designed to match the original `vnstat` and `vnstatd`.
 
@@ -80,9 +80,9 @@ DatabaseDir "/var/lib/vnstat-rs"
 # database file name
 Database "vnstat-rs.db"
 
-# Remote libSQL/Turso configuration (libSQL-rs specific)
-LibsqlUrl "libsql://your-db-name.turso.io"
-LibsqlToken "your-auth-token"
+# Remote Turso configuration (vnstat-rs specific)
+TursoUrl "libsql://your-db-name.turso.io"
+TursoToken "your-auth-token"
 
 # Intervals in seconds
 UpdateInterval 30

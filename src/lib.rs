@@ -1,12 +1,16 @@
 use anyhow::{Context, Result};
-use libsql::{params, Builder, Connection, Database};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub enum DbType {
+    Local(turso::Database),
+    Sync(turso::sync::Database),
+}
+
 pub struct Db {
-    pub db: Database,
-    pub conn: Connection,
+    pub db: DbType,
+    pub conn: turso::Connection,
     pub hostname: String,
     pub machine_id: String,
 }
@@ -38,38 +42,44 @@ impl Db {
 
         let path_str = path.to_string_lossy().to_string();
         
-        let db = if let (Some(url), Some(token)) = (url, token) {
+        let (db_type, conn) = if let (Some(url), Some(token)) = (url, token) {
             println!("Opening remote replica at {}...", url);
-            let db = Builder::new_remote_replica(path_str, url, token)
+            let db = turso::sync::Builder::new_remote(&path_str)
+                .with_remote_url(url)
+                .with_auth_token(token)
                 .build()
                 .await?;
-            println!("Initial sync...");
-            if let Err(e) = db.sync().await {
-                eprintln!("Warning: Initial sync failed: {}", e);
+            println!("Initial sync (pull)...");
+            if let Err(e) = db.pull().await {
+                eprintln!("Warning: Initial pull failed: {}", e);
             }
-            db
+            let conn = db.connect().await?;
+            (DbType::Sync(db), conn)
         } else {
-            Builder::new_local(&path_str).build().await?
+            let db = turso::Builder::new_local(&path_str).build().await?;
+            let conn = db.connect()?;
+            (DbType::Local(db), conn)
         };
 
-        let conn = db.connect()?;
         let hostname = hostname::get()?.to_string_lossy().to_string();
         let machine_id = get_machine_id()?;
 
-        Ok(Self { db, conn, hostname, machine_id })
+        Ok(Self { db: db_type, conn, hostname, machine_id })
     }
 
     pub async fn sync(&self) -> Result<()> {
-        println!("Syncing with remote...");
-        self.db.sync().await?;
-        println!("Sync complete.");
+        if let DbType::Sync(ref db) = self.db {
+            println!("Syncing with remote (pull & push)...");
+            db.pull().await?;
+            db.push().await?;
+            println!("Sync complete.");
+        } else {
+            println!("Skipping sync: No remote database configured.");
+        }
         Ok(())
     }
 
     pub async fn init_schema(&self) -> Result<()> {
-        // Enable foreign keys
-        self.conn.execute("PRAGMA foreign_keys = ON;", ()).await?;
-
         // Info table
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS info (
@@ -131,7 +141,7 @@ impl Db {
     pub async fn get_interface(&self, name: &str) -> Result<Option<(i64, u64, u64)>> {
         let mut rows = self.conn.query(
             "SELECT id, rxcounter, txcounter FROM interface WHERE machine_id = ? AND name = ?", 
-            params![self.machine_id.clone(), name]
+            (self.machine_id.clone(), name)
         ).await?;
         
         if let Some(row) = rows.next().await? {
@@ -144,12 +154,12 @@ impl Db {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         self.conn.execute(
             "INSERT INTO interface (name, created, updated, rxcounter, txcounter, machine_id, hostname) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![name, now, now, rx as i64, tx as i64, self.machine_id.clone(), self.hostname.clone()],
+            (name, now, now, rx as i64, tx as i64, self.machine_id.clone(), self.hostname.clone()),
         ).await?;
 
         let mut rows = self.conn.query(
             "SELECT id FROM interface WHERE machine_id = ? AND name = ?", 
-            params![self.machine_id.clone(), name]
+            (self.machine_id.clone(), name)
         ).await?;
         
         if let Some(row) = rows.next().await? {
@@ -162,7 +172,7 @@ impl Db {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         self.conn.execute(
             "UPDATE interface SET updated = ?, rxcounter = ?, txcounter = ?, rxtotal = rxtotal + ?, txtotal = txtotal + ? WHERE id = ?",
-            params![now, rx as i64, tx as i64, rx_delta as i64, tx_delta as i64, id],
+            (now, rx as i64, tx as i64, rx_delta as i64, tx_delta as i64, id),
         ).await?;
         Ok(())
     }
@@ -174,7 +184,7 @@ impl Db {
                  ON CONFLICT(interface, date) DO UPDATE SET rx = rx + excluded.rx, tx = tx + excluded.tx",
                 table
             ),
-            params![interface_id, date, rx as i64, tx as i64],
+            (interface_id, date, rx as i64, tx as i64),
         ).await?;
         Ok(())
     }
@@ -219,8 +229,7 @@ impl Db {
                     self.add_traffic(id, "day", day, rx_delta, tx_delta).await?;
 
                     // month (approximate to 1st of month)
-                    // For true compatibility we should use better date logic, but this is a good start
-                    let month = now - (now % 2592000); // placeholder simple month
+                    let month = now - (now % 2592000); 
                     self.add_traffic(id, "month", month, rx_delta, tx_delta).await?;
 
                     println!("Updated {}: +rx={} +tx={}", stat.name, format_bytes(rx_delta), format_bytes(tx_delta));
@@ -262,8 +271,8 @@ pub fn load_config(path: &Path) -> Config {
             match key {
                 "DatabaseDir" => database_dir = Some(PathBuf::from(value)),
                 "Database" => database_file = Some(value.to_string()),
-                "LibsqlUrl" => config.url = Some(value.to_string()),
-                "LibsqlToken" => config.token = Some(value.to_string()),
+                "TursoUrl" => config.url = Some(value.to_string()),
+                "TursoToken" => config.token = Some(value.to_string()),
                 "UpdateInterval" => {
                     if let Ok(v) = value.parse() { config.update_interval = v; }
                 }

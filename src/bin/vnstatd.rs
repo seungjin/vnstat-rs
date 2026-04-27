@@ -55,7 +55,7 @@ struct Cli {
     #[arg(long)]
     sync_counters: bool,
 
-    // libSQL specific additions
+    // Turso specific additions
     /// Update interval in seconds
     #[arg(long)]
     interval: Option<u64>,
@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
     }
 
     if cli.version {
-        println!("vnStatd-rs {} by Seungjin Kim (libSQL 0.9.30)", env!("CARGO_PKG_VERSION"));
+        println!("vnStatd-rs {} by Seungjin Kim (Turso {})", env!("CARGO_PKG_VERSION"), env!("TURSO_VERSION"));
         return Ok(());
     }
 
