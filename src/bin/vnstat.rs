@@ -127,7 +127,7 @@ async fn main() -> Result<()> {
                         for s in stats {
                             let total = s.rx_bytes + s.tx_bytes;
                             println!("{:<20} {:<15} {:<15} {:<15} {:<15}", 
-                                file_config.url.as_deref().unwrap_or("local"), // Host is tricky over IPC without Info call
+                                s.hostname,
                                 s.name, 
                                 format_bytes(s.rx_bytes), 
                                 format_bytes(s.tx_bytes), 

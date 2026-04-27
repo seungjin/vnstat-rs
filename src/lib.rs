@@ -20,6 +20,7 @@ pub struct InterfaceStats {
     pub name: String,
     pub rx_bytes: u64,
     pub tx_bytes: u64,
+    pub hostname: String,
 }
 
 #[derive(Default, Debug)]
@@ -268,7 +269,7 @@ impl Db {
     }
 
     pub async fn get_all_interface_stats(&self, filter_iface: Option<&str>) -> Result<Vec<InterfaceStats>> {
-        let mut query = "SELECT name, rxtotal, txtotal FROM interface".to_string();
+        let mut query = "SELECT name, rxtotal, txtotal, hostname FROM interface".to_string();
         if let Some(iface) = filter_iface {
             query.push_str(&format!(" WHERE name = '{}'", iface));
         }
@@ -280,6 +281,7 @@ impl Db {
                 name: row.get(0)?,
                 rx_bytes: row.get::<i64>(1)? as u64,
                 tx_bytes: row.get::<i64>(2)? as u64,
+                hostname: row.get(3)?,
             });
         }
         Ok(stats)
@@ -380,6 +382,7 @@ pub fn get_machine_id() -> Result<String> {
 
 pub fn parse_net_dev() -> Result<Vec<InterfaceStats>> {
     let content = fs::read_to_string("/proc/net/dev")?;
+    let hostname = hostname::get()?.to_string_lossy().to_string();
     let mut stats = Vec::new();
 
     for line in content.lines().skip(2) {
@@ -396,6 +399,7 @@ pub fn parse_net_dev() -> Result<Vec<InterfaceStats>> {
             name,
             rx_bytes,
             tx_bytes,
+            hostname: hostname.clone(),
         });
     }
 
