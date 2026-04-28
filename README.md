@@ -104,6 +104,30 @@ A systemd service file is provided in `vnstatd-rs.service`. To install it:
    sudo systemctl enable --now vnstatd-rs
    ```
 
+## Running without sudo
+
+By default, the application uses root-restricted system paths (`/var/lib/vnstat-rs`, `/etc/vnstat-rs.conf`). You can run as a normal user by using a local configuration:
+
+1. Create a local config file (e.g., `~/.vnstat-rs.conf`):
+   ```bash
+   mkdir -p ~/.vnstat-rs/db
+   cat > ~/.vnstat-rs.conf <<EOF
+   DatabaseDir "$HOME/.vnstat-rs/db"
+   Database "vnstat-rs.db"
+   DaemonSocket "$HOME/.vnstat-rs/vnstat-rs.sock"
+   EOF
+   ```
+
+2. Start the daemon:
+   ```bash
+   vnstatd-rs --config ~/.vnstat-rs.conf --daemon
+   ```
+
+3. Run the CLI:
+   ```bash
+   vnstat-rs --config ~/.vnstat-rs.conf -l
+   ```
+
 ## License
 
 This project is licensed under either of

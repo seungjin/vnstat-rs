@@ -92,18 +92,34 @@ async fn main() -> Result<()> {
     let token = file_config.token;
 
     let db = Db::open(db_path, url, token).await?;
-    db.init_schema().await?;
 
     if cli.initdb {
-        println!("Initializing database for host: {} ({})", db.hostname, db.machine_id);
-        db.init_schema().await?;
-        println!("Database initialized.");
+        println!("Database initialized for host: {} ({})", db.hostname, db.machine_id);
         return Ok(());
     }
 
     if cli.sync_counters {
         db.sync().await?;
         return Ok(());
+    }
+
+    if cli.daemon {
+        let mut daemonize = daemonize::Daemonize::new()
+            .user(cli.user.as_deref().unwrap_or("nobody"))
+            .group(cli.group.as_deref().unwrap_or("nogroup"))
+            .umask(0o027);
+
+        if let Some(ref pid) = cli.pidfile {
+            daemonize = daemonize.pid_file(pid);
+        }
+
+        match daemonize.start() {
+            Ok(_) => println!("Success, daemonized"),
+            Err(e) => {
+                eprintln!("Error daemonizing: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 
     let db = Arc::new(db);
@@ -139,9 +155,15 @@ async fn main() -> Result<()> {
                                             Err(e) => IpcResponse::Error(e.to_string()),
                                         }
                                     }
-                                    Ok(IpcRequest::GetHistory { table, interface, limit }) => {
-                                        match db.get_history(&table, interface.as_deref(), limit).await {
+                                    Ok(IpcRequest::GetHistory { table, interface, limit, begin, end }) => {
+                                        match db.get_history(&table, interface.as_deref(), limit, begin, end).await {
                                             Ok(history) => IpcResponse::History(history),
+                                            Err(e) => IpcResponse::Error(e.to_string()),
+                                        }
+                                    }
+                                    Ok(IpcRequest::GetSummary { interface }) => {
+                                        match db.get_summary(interface.as_deref()).await {
+                                            Ok(summary) => IpcResponse::Summary(summary),
                                             Err(e) => IpcResponse::Error(e.to_string()),
                                         }
                                     }
