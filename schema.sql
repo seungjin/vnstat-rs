@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS top (
 );
 
 -- Backwards compatibility or metadata
-CREATE TABLE IF NOT EXISTS schema_info (
+CREATE TABLE IF NOT EXISTS info (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     value TEXT NOT NULL

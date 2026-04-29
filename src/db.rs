@@ -109,18 +109,30 @@ impl Db {
         // Check legacy tables
         let mut v = 0;
         
-        // Try schema_info first
-        if let Ok(mut r) = self.conn.query("SELECT value FROM schema_info WHERE name = 'version'", ()).await {
+        // Try info table with schema_version key
+        if let Ok(mut r) = self.conn.query("SELECT value FROM info WHERE name = 'schema_version'", ()).await {
             if let Some(row) = r.next().await? {
                 v = row.get::<String>(0)?.parse().unwrap_or(0);
             }
         } 
-        // Then try old info table
-        else if let Ok(mut r) = self.conn.query("SELECT value FROM info WHERE name = 'version'", ()).await {
-            if let Some(row) = r.next().await? {
-                v = row.get::<String>(0)?.parse().unwrap_or(0);
-                // Rename info to schema_info for consistency
-                let _ = self.conn.execute("ALTER TABLE info RENAME TO schema_info", ()).await;
+        // Then try info table with old version key
+        if v == 0 {
+            if let Ok(mut r) = self.conn.query("SELECT value FROM info WHERE name = 'version'", ()).await {
+                if let Some(row) = r.next().await? {
+                    v = row.get::<String>(0)?.parse().unwrap_or(0);
+                    // Update key to schema_version
+                    let _ = self.conn.execute("UPDATE info SET name = 'schema_version' WHERE name = 'version'", ()).await;
+                }
+            }
+        }
+        // Finally try schema_info table if it exists (from a previous migration)
+        if v == 0 {
+            if let Ok(mut r) = self.conn.query("SELECT value FROM schema_info WHERE name = 'version'", ()).await {
+                if let Some(row) = r.next().await? {
+                    v = row.get::<String>(0)?.parse().unwrap_or(0);
+                    // Drop schema_info if we're moving back to info
+                    let _ = self.conn.execute("DROP TABLE schema_info", ()).await;
+                }
             }
         }
 
