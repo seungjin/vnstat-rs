@@ -119,19 +119,18 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
             _ => table.to_string(),
         };
 
-        println!(" {}  /  {}\n", iface, title);
+        println!("\n {}  /  {}\n", iface, title);
         
-        let label_header = match table {
-            "fiveminute" | "hour" => "      time  ",
-            "day" => "      day   ",
-            "month" => "        month",
-            "year" => "        year ",
-            _ => "      date  ",
+        let (label_header, separator_indent) = match table {
+            "fiveminute" | "hour" => ("         time            rx      ", 5),
+            "day" => ("          day         rx      ", 5),
+            "month" => ("        month        rx      ", 5),
+            "year" => ("          year        rx      ", 5),
+            _ => ("          date        rx      ", 5),
         };
 
-        println!(" {:<14} {:>10} | {:>10} | {:>10} | {:>12}", 
-            label_header, "rx", "tx", "total", "avg. rate");
-        println!("     ------------------------+-------------+-------------+---------------");
+        println!("{}|     tx      |    total    |   avg. rate", label_header);
+        println!("{:indent$}------------------------+-------------+-------------+---------------", "", indent = separator_indent);
 
         for entry in entries {
             let dt = DateTime::from_timestamp(entry.date, 0).unwrap();
@@ -168,11 +167,22 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
             let rate_bits = (total * 8) as f64 / seconds as f64;
             let rate_str = format_rate(rate_bits);
 
-            println!("       {:<10} {:>10} | {:>11} | {:>11} | {:>14}", 
-                label, format_bytes_short(entry.rx), format_bytes_short(entry.tx), format_bytes_short(total), rate_str);
+            let rx_str = format_bytes_short(entry.rx);
+            let tx_str = format_bytes_short(entry.tx);
+            let total_str = format_bytes_short(total);
+
+            let label_part = match table {
+                "month" => format!("       {:<7}    {:>10} ", label, rx_str),
+                "day" => format!("      {:<10}  {:>10} ", label, rx_str),
+                "year" => format!("        {:<4}       {:>10} ", label, rx_str),
+                _ => format!("     {:<16} {:>10} ", label, rx_str),
+            };
+
+            println!("{}|  {:>10} |  {:>10} |    {:>11}", 
+                label_part, tx_str, total_str, rate_str);
         }
 
-        println!("     ------------------------+-------------+-------------+---------------");
+        println!("{:indent$}------------------------+-------------+-------------+---------------", "", indent = separator_indent);
 
         if let Some(latest) = entries.last() {
             let dt = DateTime::from_timestamp(latest.date, 0).unwrap();
@@ -215,7 +225,7 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
                     let est_tx = (latest.tx as f64 * (total_secs / secs_passed)) as u64;
                     let est_total = est_rx + est_tx;
 
-                    println!("     {:<12} {:>10} | {:>11} | {:>11} |", 
+                    println!("     {:<12} {:>10} |  {:>10} |  {:>10} |", 
                         "estimated", format_bytes_short(est_rx), format_bytes_short(est_tx), format_bytes_short(est_total));
                 }
             }
