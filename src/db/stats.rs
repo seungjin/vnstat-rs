@@ -1,7 +1,7 @@
 use anyhow::{Result};
-use chrono::Datelike;
+use chrono::{Datelike};
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::models::{InterfaceStats, HistoryEntry, SummaryData};
+use crate::models::{InterfaceStats, HistoryEntry, SummaryData, NintyFifthData};
 use crate::utils::{parse_net_dev};
 use crate::db::Db;
 use libsql::params;
@@ -240,5 +240,65 @@ impl Db {
             });
         }
         Ok(summaries)
+    }
+
+    pub async fn get_95th_data(&self, filter_iface: Option<&str>, filter_host: Option<&str>) -> Result<NintyFifthData> {
+        let conn = if filter_host.is_some() && filter_host != Some(&self.machine_id) {
+             self.remote_conn.as_ref().unwrap_or(&self.local_conn)
+        } else {
+             &self.local_conn
+        };
+
+        // Find the specific interface
+        let mut iface_query = "SELECT i.id, i.name, h.hostname FROM interface i JOIN host h ON i.host_id = h.id WHERE 1=1 ".to_string();
+        if let Some(iface) = filter_iface {
+            iface_query.push_str(&format!(" AND i.name = '{}'", iface));
+        }
+        if let Some(host) = filter_host {
+            iface_query.push_str(&format!(" AND (h.hostname = '{}' OR h.machine_id = '{}')", host, host));
+        }
+        iface_query.push_str(" LIMIT 1");
+
+        let mut rows = conn.query(&iface_query, params![]).await?;
+        let (iface_id, name, hostname) = if let Some(row) = rows.next().await? {
+            (row.get::<String>(0)?, row.get::<String>(1)?, row.get::<String>(2)?)
+        } else {
+            return Err(anyhow::anyhow!("Interface not found"));
+        };
+
+        let now = chrono::Utc::now();
+        let month_start = now.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let begin = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(month_start, chrono::Utc).timestamp();
+        let end = now.timestamp();
+
+        let mut data_rows = conn.query(
+            "SELECT rx, tx FROM fiveminute WHERE interface = ? AND date >= ? AND date <= ? ORDER BY date ASC",
+            (iface_id, begin, end)
+        ).await?;
+
+        let mut rx = Vec::new();
+        let mut tx = Vec::new();
+        while let Some(row) = data_rows.next().await? {
+            rx.push(row.get::<i64>(0)? as u64);
+            tx.push(row.get::<i64>(1)? as u64);
+        }
+
+        let total_expected = ((end - begin) / 300) as usize;
+        let coverage = if total_expected > 0 {
+            (rx.len() as f64 / total_expected as f64) * 100.0
+        } else {
+            100.0
+        };
+
+        Ok(NintyFifthData {
+            interface: name,
+            hostname,
+            begin,
+            end,
+            count: rx.len(),
+            coverage,
+            rx,
+            tx,
+        })
     }
 }

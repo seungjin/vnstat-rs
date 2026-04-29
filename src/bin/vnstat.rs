@@ -3,7 +3,7 @@ use clap::{Parser};
 use std::path::{PathBuf};
 use tokio::net::UnixStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use vnstat_rs::{Db, parse_net_dev, format_bytes, IpcRequest, IpcResponse, print_summary_table, print_history_table};
+use vnstat_rs::{Db, parse_net_dev, format_bytes, IpcRequest, IpcResponse, print_summary_table, print_history_table, print_95th_table, format_rate};
 
 async fn request_daemon(socket_path: &PathBuf, req: IpcRequest) -> Result<IpcResponse> {
     let mut stream = UnixStream::connect(socket_path).await?;
@@ -55,8 +55,8 @@ async fn run_live(iface: Option<String>) -> Result<()> {
     let start_time = std::time::Instant::now();
     let mut first_iteration = true;
     
-    let mut max_rx_kbit = 0.0;
-    let mut max_tx_kbit = 0.0;
+    let mut max_rx_bps = 0.0;
+    let mut max_tx_bps = 0.0;
     let mut total_rx_bytes = 0;
     let mut total_tx_bytes = 0;
     let mut total_rx_packets = 0;
@@ -78,10 +78,10 @@ async fn run_live(iface: Option<String>) -> Result<()> {
                         vnstat_rs::format_bytes(total_rx_bytes), 
                         vnstat_rs::format_bytes(total_tx_bytes));
                     println!("--------------------------------------+------------------");
-                    println!("  max                {:>10.2} kbit/s |  {:>10.2} kbit/s", max_rx_kbit, max_tx_kbit);
-                    println!("  average            {:>10.2} kbit/s |  {:>10.2} kbit/s", 
-                        (total_rx_bytes as f64 * 8.0) / (secs * 1000.0),
-                        (total_tx_bytes as f64 * 8.0) / (secs * 1000.0));
+                    println!("  max                {:>15} |  {:>15}", format_rate(max_rx_bps), format_rate(max_tx_bps));
+                    println!("  average            {:>15} |  {:>15}", 
+                        format_rate((total_rx_bytes as f64 * 8.0) / secs),
+                        format_rate((total_tx_bytes as f64 * 8.0) / secs));
                     println!("--------------------------------------+------------------");
                     println!("  packets              {:>12}   |  {:>12}", total_rx_packets, total_tx_packets);
                     println!("--------------------------------------+------------------");
@@ -108,18 +108,18 @@ async fn run_live(iface: Option<String>) -> Result<()> {
                 let rx_packets_delta = if curr.rx_packets >= last_stats.rx_packets { curr.rx_packets - last_stats.rx_packets } else { 0 };
                 let tx_packets_delta = if curr.tx_packets >= last_stats.tx_packets { curr.tx_packets - last_stats.tx_packets } else { 0 };
                 
-                let rx_kbit = (rx_bytes_delta as f64 * 8.0) / 1000.0;
-                let tx_kbit = (tx_bytes_delta as f64 * 8.0) / 1000.0;
+                let rx_bps = rx_bytes_delta as f64 * 8.0;
+                let tx_bps = tx_bytes_delta as f64 * 8.0;
 
-                if rx_kbit > max_rx_kbit { max_rx_kbit = rx_kbit; }
-                if tx_kbit > max_tx_kbit { max_tx_kbit = tx_kbit; }
+                if rx_bps > max_rx_bps { max_rx_bps = rx_bps; }
+                if tx_bps > max_tx_bps { max_tx_bps = tx_bps; }
                 total_rx_bytes += rx_bytes_delta;
                 total_tx_bytes += tx_bytes_delta;
                 total_rx_packets += rx_packets_delta;
                 total_tx_packets += tx_packets_delta;
 
-                println!("   rx: {:>10.2} kbit/s {:>5} p/s          tx: {:>10.2} kbit/s {:>5} p/s\x1B[K", 
-                    rx_kbit, rx_packets_delta, tx_kbit, tx_packets_delta);
+                println!("   rx: {:>15} {:>5} p/s          tx: {:>15} {:>5} p/s\x1B[K", 
+                    format_rate(rx_bps), rx_packets_delta, format_rate(tx_bps), tx_packets_delta);
 
                 last_stats = curr.clone();
                 use std::io::Write;
@@ -198,7 +198,7 @@ struct Cli {
     #[arg(short, long, value_name = "date")]
     end: Option<String>,
 
-    /// Show 95th percentile (not implemented)
+    /// Show 95th percentile
     #[arg(long = "95th")]
     nintyfifth: bool,
 
@@ -326,6 +326,8 @@ async fn main() -> Result<()> {
                 Some(IpcRequest::GetInfo)
             } else if cli.host_list {
                 Some(IpcRequest::ListHosts)
+            } else if cli.nintyfifth {
+                Some(IpcRequest::Get95th { interface: cli.iface.clone(), host: host_filter_ipc.clone() })
             } else if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
                 let (table, limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(30)) }
                     else if let Some(l) = cli.hours { ("hour", l.unwrap_or(30)) }
@@ -389,6 +391,10 @@ async fn main() -> Result<()> {
                                 print_history_table(&requested_table, history, requested_limit);
                             }
                         }
+                        return Ok(());
+                    }
+                    Ok(IpcResponse::NintyFifth(data)) => {
+                        print_95th_table(data, file_config.five_minute_hours);
                         return Ok(());
                     }
                     Ok(IpcResponse::Info { hostname, machine_id, mac_address }) => {
@@ -477,6 +483,12 @@ async fn main() -> Result<()> {
     }
 
     let final_host_filter = if cli.host_all { None } else { cli.host.as_deref().or(current_machine_id.as_deref()) };
+
+    if cli.nintyfifth {
+        let data = db.get_95th_data(cli.iface.as_deref(), final_host_filter).await?;
+        print_95th_table(data, file_config.five_minute_hours);
+        return Ok(());
+    }
 
     if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
         let (table, limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(30)) }

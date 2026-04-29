@@ -1,4 +1,4 @@
-use crate::models::{HistoryEntry, SummaryData};
+use crate::models::{HistoryEntry, SummaryData, NintyFifthData};
 use crate::utils::format_bytes;
 use chrono::{DateTime, Datelike, Utc};
 
@@ -223,18 +223,93 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
     }
 }
 
+pub fn print_95th_table(data: NintyFifthData, five_minute_hours: u32) {
+    let now = Utc::now();
+    let days_in_month = match now.month() {
+        1|3|5|7|8|10|12 => 31,
+        4|6|9|11 => 30,
+        2 => if (now.year() % 4 == 0 && now.year() % 100 != 0) || (now.year() % 400 == 0) { 29 } else { 28 },
+        _ => 30,
+    };
+    let required_hours = days_in_month * 24;
+
+    if five_minute_hours < required_hours {
+        println!("\nWarning: Configuration \"5MinuteHours\" needs to be at least {} for 100% coverage.", required_hours);
+        println!("         \"5MinuteHours\" is currently set at {}.\n", five_minute_hours);
+    }
+
+    println!(" {}  /  95th percentile\n", data.interface);
+    
+    let begin_dt = DateTime::from_timestamp(data.begin, 0).unwrap();
+    let end_dt = DateTime::from_timestamp(data.end, 0).unwrap();
+    
+    println!(" {} - {} ({} entries, {:.1}% coverage)\n", 
+        begin_dt.format("%Y-%m-%d %H:%M"), 
+        end_dt.format("%Y-%m-%d %H:%M"),
+        data.count, data.coverage);
+
+    println!("                          rx       |       tx       |     total");
+    println!("       ----------------------------+----------------+---------------");
+
+    let calculate_stats = |v: &[u64]| -> (f64, f64, f64, f64) {
+        if v.is_empty() { return (0.0, 0.0, 0.0, 0.0); }
+        let mut sorted = v.to_vec();
+        sorted.sort();
+        
+        let min = sorted[0] as f64;
+        let max = sorted[sorted.len()-1] as f64;
+        let avg = v.iter().sum::<u64>() as f64 / v.len() as f64;
+        
+        let idx = (0.95 * (sorted.len() as f64 - 1.0)) as usize;
+        let ninty_fifth = sorted[idx] as f64;
+        
+        // Data is in bytes per 5 minutes. Convert to bits per second.
+        (min * 8.0 / 300.0, avg * 8.0 / 300.0, max * 8.0 / 300.0, ninty_fifth * 8.0 / 300.0)
+    };
+
+    let (rx_min, rx_avg, rx_max, rx_95) = calculate_stats(&data.rx);
+    let (tx_min, tx_avg, tx_max, tx_95) = calculate_stats(&data.tx);
+    
+    let total_v: Vec<u64> = data.rx.iter().zip(data.tx.iter()).map(|(r, t)| r + t).collect();
+    let (total_min, total_avg, total_max, total_95) = calculate_stats(&total_v);
+
+    println!("       {:<12} {:>14} | {:>14} | {:>14}", "minimum", format_rate(rx_min), format_rate(tx_min), format_rate(total_min));
+    println!("       {:<12} {:>14} | {:>14} | {:>14}", "average", format_rate(rx_avg), format_rate(tx_avg), format_rate(total_avg));
+    println!("       {:<12} {:>14} | {:>14} | {:>14}", "maximum", format_rate(rx_max), format_rate(tx_max), format_rate(total_max));
+    println!("       ----------------------------+----------------+---------------");
+    println!("        95th %      {:>14} | {:>14} | {:>14}", format_rate(rx_95), format_rate(tx_95), format_rate(total_95));
+}
+
 pub fn format_bytes_short(bytes: u64) -> String {
     format_bytes(bytes)
 }
 
 pub fn format_rate(bits_per_sec: f64) -> String {
-    if bits_per_sec >= 1_000_000_000.0 {
-        format!("{:.2} Mbit/s", bits_per_sec / 1_000_000.0)
+    if bits_per_sec >= 1_000_000_000_000.0 {
+        format!("{:.2} Tbit/s", bits_per_sec / 1_000_000_000_000.0)
+    } else if bits_per_sec >= 1_000_000_000.0 {
+        format!("{:.2} Gbit/s", bits_per_sec / 1_000_000_000.0)
     } else if bits_per_sec >= 1_000_000.0 {
         format!("{:.2} Mbit/s", bits_per_sec / 1_000_000.0)
     } else if bits_per_sec >= 1_000.0 {
         format!("{:.2} kbit/s", bits_per_sec / 1_000.0)
     } else {
         format!("{:.2} bit/s", bits_per_sec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_rate() {
+        assert_eq!(format_rate(1_500_000_000_000.0), "1.50 Tbit/s");
+        assert_eq!(format_rate(1_000_000_000.0), "1.00 Gbit/s");
+        assert_eq!(format_rate(500_000_000.0), "500.00 Mbit/s");
+        assert_eq!(format_rate(389_393_090.0), "389.39 Mbit/s");
+        assert_eq!(format_rate(9_931_520.0), "9.93 Mbit/s");
+        assert_eq!(format_rate(500_000.0), "500.00 kbit/s");
+        assert_eq!(format_rate(500.0), "500.00 bit/s");
     }
 }

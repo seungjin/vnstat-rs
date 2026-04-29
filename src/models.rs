@@ -97,6 +97,18 @@ pub struct SummaryData {
     pub last_month: (u64, u64),
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+pub struct NintyFifthData {
+    pub interface: String,
+    pub hostname: String,
+    pub begin: i64,
+    pub end: i64,
+    pub count: usize,
+    pub coverage: f64,
+    pub rx: Vec<u64>,
+    pub tx: Vec<u64>,
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct HistoryEntry {
     pub hostname: String,

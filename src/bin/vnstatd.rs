@@ -202,6 +202,12 @@ async fn main() -> Result<()> {
                                             Err(e) => IpcResponse::Error(e.to_string()),
                                         }
                                     }
+                                    Ok(IpcRequest::Get95th { interface, host }) => {
+                                        match db.get_95th_data(interface.as_deref(), host.as_deref()).await {
+                                            Ok(data) => IpcResponse::NintyFifth(data),
+                                            Err(e) => IpcResponse::Error(e.to_string()),
+                                        }
+                                    }
                                     Err(e) => IpcResponse::Error(e.to_string()),
                                 };
                                 let resp_json = serde_json::to_vec(&resp).unwrap();

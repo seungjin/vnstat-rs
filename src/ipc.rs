@@ -1,4 +1,4 @@
-use crate::models::{InterfaceStats, HistoryEntry, SummaryData};
+use crate::models::{InterfaceStats, HistoryEntry, SummaryData, NintyFifthData};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub enum IpcRequest {
@@ -16,6 +16,7 @@ pub enum IpcRequest {
     GetConfig { name: String },
     SetConfig { name: String, value: String },
     ListHosts,
+    Get95th { interface: Option<String>, host: Option<String> },
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -23,6 +24,7 @@ pub enum IpcResponse {
     Stats(Vec<InterfaceStats>),
     History(Vec<HistoryEntry>),
     Summary(Vec<SummaryData>),
+    NintyFifth(NintyFifthData),
     Info { hostname: String, machine_id: String, mac_address: Option<String> },
     Hosts(Vec<(String, String)>),
     Config(Option<String>),

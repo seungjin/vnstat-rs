@@ -10,7 +10,7 @@ release:
 
 # Run the project with arguments
 run *args:
-    cargo run -- {{args}}
+    cargo run -- {{ args }}
 
 # Initialize the database
 init:

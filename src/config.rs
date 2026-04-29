@@ -9,6 +9,7 @@ pub struct Config {
     pub token: Option<String>,
     pub update_interval: u64,
     pub sync_interval: u64,
+    pub five_minute_hours: u32,
     pub daemon_socket: Option<PathBuf>,
     pub hostname_override: Option<String>,
 }
@@ -17,6 +18,7 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
     let mut config = Config {
         update_interval: 30,
         sync_interval: 300,
+        five_minute_hours: 48,
         ..Default::default()
     };
 
@@ -50,6 +52,9 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
             }
             "SyncInterval" => {
                 if let Ok(v) = value.parse() { config.sync_interval = v; }
+            }
+            "5MinuteHours" => {
+                if let Ok(v) = value.parse() { config.five_minute_hours = v; }
             }
             "DaemonSocket" => config.daemon_socket = Some(expand_tilde(value)),
             "Hostname" => config.hostname_override = Some(value.to_string()),
@@ -88,6 +93,7 @@ pub fn get_default_config(is_root: bool) -> Config {
     let mut config = Config {
         update_interval: 30,
         sync_interval: 300,
+        five_minute_hours: 48,
         ..Default::default()
     };
 
