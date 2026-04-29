@@ -26,7 +26,6 @@ impl Db {
     pub async fn open(path: PathBuf, url: Option<String>, token: Option<String>) -> Result<Self> {
         let (db_type, conn) = if let (Some(url), Some(token)) = (url, token) {
             println!("Connecting to remote database at {}...", url);
-            // We use an in-memory sync database as a bridge to push data
             let db = turso::sync::Builder::new_remote(":memory:")
                 .with_remote_url(url)
                 .with_auth_token(token)
@@ -134,6 +133,12 @@ impl Db {
                             let _ = self.conn.execute(&format!("ALTER TABLE {} RENAME TO {}_old", table, table), ()).await;
                         }
 
+                        // IMPORTANT: Sync renames to remote before trying to SELECT from them
+                        if let Err(e) = self.sync().await {
+                            println!("Warning: Migration sync (renames) failed: {}. Continuing...", e);
+                        }
+
+                        // Recreate fresh schema
                         for statement in SCHEMA_SQL.split(';') {
                             let trimmed = statement.trim();
                             if !trimmed.is_empty() {
@@ -168,6 +173,7 @@ impl Db {
                             let _ = self.conn.execute(&format!("DROP TABLE IF EXISTS {}_old", table), ()).await;
                         }
                     } else {
+                        // Already migrated, just ensure schema is present
                         for statement in SCHEMA_SQL.split(';') {
                             let trimmed = statement.trim();
                             if !trimmed.is_empty() {
