@@ -26,6 +26,7 @@ impl Db {
     pub async fn open(path: PathBuf, url: Option<String>, token: Option<String>) -> Result<Self> {
         let (db_type, conn) = if let (Some(url), Some(token)) = (url, token) {
             println!("Connecting to remote database at {}...", url);
+            // We use an in-memory sync database as a bridge to push data
             let db = turso::sync::Builder::new_remote(":memory:")
                 .with_remote_url(url)
                 .with_auth_token(token)
@@ -57,6 +58,9 @@ impl Db {
     }
 
     pub async fn sync(&self) -> Result<()> {
+        if let DbType::Remote(ref db) = self.db {
+            db.push().await?;
+        }
         Ok(())
     }
 
@@ -80,6 +84,7 @@ impl Db {
                 self.conn.execute(trimmed, ()).await?;
             }
         }
+        self.sync().await?;
         Ok(())
     }
 
@@ -108,7 +113,6 @@ impl Db {
                 if version < 4 {
                     let _ = self.conn.execute("PRAGMA foreign_keys = OFF", ()).await;
 
-                    // Check if migration is already effectively done
                     let mut needs_migration = true;
                     if let Ok(mut r) = self.conn.query("PRAGMA table_info(host)", ()).await {
                         while let Some(row) = r.next().await? {
@@ -130,7 +134,6 @@ impl Db {
                             let _ = self.conn.execute(&format!("ALTER TABLE {} RENAME TO {}_old", table, table), ()).await;
                         }
 
-                        // Recreate fresh schema
                         for statement in SCHEMA_SQL.split(';') {
                             let trimmed = statement.trim();
                             if !trimmed.is_empty() {
@@ -165,7 +168,6 @@ impl Db {
                             let _ = self.conn.execute(&format!("DROP TABLE IF EXISTS {}_old", table), ()).await;
                         }
                     } else {
-                        // Already migrated, just ensure schema is present
                         for statement in SCHEMA_SQL.split(';') {
                             let trimmed = statement.trim();
                             if !trimmed.is_empty() {
@@ -189,7 +191,7 @@ impl Db {
                 }
             }
         }
-
+        self.sync().await?;
         Ok(())
     }
 
@@ -204,6 +206,7 @@ impl Db {
             (self.hostname.clone(), self.machine_id.clone()),
         ).await?;
 
+        self.sync().await?;
         Ok(self.machine_id.clone())
     }
 
@@ -227,6 +230,7 @@ impl Db {
             (id.clone(), self.host_id.clone(), name, now, now, rx as i64, tx as i64),
         ).await?;
 
+        self.sync().await?;
         Ok(id)
     }
 
@@ -236,6 +240,7 @@ impl Db {
             "UPDATE interface SET updated = ?, rxcounter = ?, txcounter = ?, rxtotal = rxtotal + ?, txtotal = txtotal + ? WHERE id = ?",
             (now, rx as i64, tx as i64, rx_delta as i64, tx_delta as i64, id),
         ).await?;
+        self.sync().await?;
         Ok(())
     }
 
@@ -248,6 +253,7 @@ impl Db {
             ),
             (interface_id, date, rx as i64, tx as i64),
         ).await?;
+        self.sync().await?;
         Ok(())
     }
 
