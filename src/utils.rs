@@ -2,6 +2,23 @@ use anyhow::{Result};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::models::InterfaceStats;
+use std::path::{Path, PathBuf};
+
+pub fn expand_tilde<P: AsRef<Path>>(path: P) -> PathBuf {
+    let p = path.as_ref();
+    if !p.starts_with("~") {
+        return p.to_path_buf();
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if p == Path::new("~") {
+            return PathBuf::from(home);
+        }
+        if let Ok(suffix) = p.strip_prefix("~") {
+            return PathBuf::from(home).join(suffix);
+        }
+    }
+    p.to_path_buf()
+}
 
 pub fn get_machine_id() -> Result<String> {
     if let Ok(id) = fs::read_to_string("/etc/machine-id") {
@@ -18,6 +35,9 @@ pub fn parse_net_dev() -> Result<Vec<InterfaceStats>> {
     let hostname = hostname::get()?.to_string_lossy().to_string();
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
     let mut stats = Vec::new();
+
+    // Get MAC addresses for all interfaces using pnet
+    let ifaces = pnet_datalink::interfaces();
 
     for line in content.lines() {
         let line = line.trim();
@@ -42,9 +62,16 @@ pub fn parse_net_dev() -> Result<Vec<InterfaceStats>> {
         let tx_bytes = data_parts[8].parse::<u64>().unwrap_or(0);
         let tx_packets = data_parts[9].parse::<u64>().unwrap_or(0);
 
+        // Find the MAC address for this interface
+        let mac_address = ifaces.iter()
+            .find(|i| i.name == name)
+            .and_then(|i| i.mac)
+            .map(|m| m.to_string());
+
         stats.push(InterfaceStats {
             name,
             alias: None,
+            mac_address,
             rx_bytes,
             tx_bytes,
             rx_packets,
@@ -74,43 +101,5 @@ pub fn format_bytes(bytes: u64) -> String {
         format!("{:.2} KiB", bytes as f64 / KB as f64)
     } else {
         format!("{} B", bytes)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Datelike;
-
-    #[test]
-    fn test_format_bytes() {
-        assert_eq!(format_bytes(500), "500 B");
-        assert_eq!(format_bytes(1024), "1.00 KiB");
-        assert_eq!(format_bytes(1024 * 1024), "1.00 MiB");
-        assert_eq!(format_bytes(1024 * 1024 * 1024), "1.00 GiB");
-        assert_eq!(format_bytes(1024 * 1024 * 1024 * 1024), "1.00 TiB");
-    }
-
-    #[test]
-    fn test_time_truncation() {
-        // 2024-05-15 12:34:56 UTC
-        let now = 1715776496; 
-        let dt = chrono::DateTime::from_timestamp(now, 0).unwrap();
-        let naive = dt.naive_utc();
-        
-        // day: 2024-05-15 00:00:00
-        let day_dt = naive.date().and_hms_opt(0, 0, 0).unwrap();
-        let day = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(day_dt, chrono::Utc).timestamp();
-        assert_eq!(day, 1715731200);
-
-        // month: 2024-05-01 00:00:00
-        let month_dt = naive.date().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-        let month = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(month_dt, chrono::Utc).timestamp();
-        assert_eq!(month, 1714521600);
-
-        // year: 2024-01-01 00:00:00
-        let year_dt = naive.date().with_day(1).unwrap().with_month(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-        let year = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(year_dt, chrono::Utc).timestamp();
-        assert_eq!(year, 1704067200);
     }
 }

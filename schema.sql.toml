@@ -1,16 +1,13 @@
-version = 2026042901
-sql = """
--- Schema version tracking
-CREATE TABLE IF NOT EXISTS database_schema (
-    version INTEGER PRIMARY KEY,
-    applied_at INTEGER NOT NULL
-);
+version = 2026042903
 
+# Full schema for fresh installs (includes all latest columns)
+sql = """
 -- Host table
 CREATE TABLE IF NOT EXISTS host (
     id           TEXT PRIMARY KEY,
     machine_id   TEXT UNIQUE NOT NULL,
-    hostname     TEXT NOT NULL
+    hostname     TEXT NOT NULL,
+    mac_address  TEXT
 );
 
 -- Interface table
@@ -19,6 +16,7 @@ CREATE TABLE IF NOT EXISTS interface (
     host_id      TEXT NOT NULL REFERENCES host(id) ON DELETE CASCADE,
     name         TEXT NOT NULL,
     alias        TEXT,
+    mac_address  TEXT,
     active       INTEGER NOT NULL DEFAULT 1,
     created      INTEGER NOT NULL,
     updated      INTEGER NOT NULL,
@@ -91,3 +89,11 @@ CREATE TABLE IF NOT EXISTS info (
     value TEXT NOT NULL
 );
 """
+
+[[migrations]]
+version = 2026042902
+sql = "ALTER TABLE host ADD COLUMN mac_address TEXT;"
+
+[[migrations]]
+version = 2026042903
+sql = "ALTER TABLE interface ADD COLUMN mac_address TEXT;"

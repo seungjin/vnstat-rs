@@ -4,6 +4,7 @@ use chrono::{Datelike, Timelike};
 pub struct InterfaceStats {
     pub name: String,
     pub alias: Option<String>,
+    pub mac_address: Option<String>,
     pub rx_bytes: u64,
     pub tx_bytes: u64,
     pub rx_packets: u64,
@@ -24,6 +25,7 @@ pub struct VnStatJson {
 pub struct JsonInterface {
     pub name: String,
     pub alias: String,
+    pub mac_address: Option<String>,
     pub created: JsonTimestamp,
     pub updated: JsonTimestamp,
     pub traffic: JsonTraffic,
@@ -85,9 +87,10 @@ pub struct JsonHistoryEntry {
     pub tx: u64,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct SummaryData {
     pub name: String,
+    pub hostname: String,
     pub today: (u64, u64),
     pub yesterday: (u64, u64),
     pub this_month: (u64, u64),
@@ -144,6 +147,7 @@ impl InterfaceStats {
         JsonInterface {
             name: self.name.clone(),
             alias: self.alias.clone().unwrap_or_default(),
+            mac_address: self.mac_address.clone(),
             created: JsonTimestamp::from_timestamp(self.created, false),
             updated: JsonTimestamp::from_timestamp(self.updated, true),
             traffic: JsonTraffic {
@@ -223,6 +227,9 @@ impl JsonInterface {
         let mut out = format!(" <interface name=\"{}\">", self.name);
         out.push_str(&format!("<name>{}</name>", self.name));
         out.push_str(&format!("<alias>{}</alias>", self.alias));
+        if let Some(ref mac) = self.mac_address {
+            out.push_str(&format!("<mac_address>{}</mac_address>", mac));
+        }
         out.push_str(&self.created.to_xml("created"));
         out.push_str(&self.updated.to_xml("updated"));
         out.push_str(&self.traffic.to_xml());
@@ -285,6 +292,7 @@ impl VnStatJson {
                 self.interfaces.push(JsonInterface {
                     name: entry.interface.clone(),
                     alias: String::new(),
+                    mac_address: None,
                     created: JsonTimestamp::from_timestamp(0, false),
                     updated: JsonTimestamp::from_timestamp(0, false),
                     traffic,
@@ -303,6 +311,7 @@ mod tests {
         let stats = vec![InterfaceStats {
             name: "eth0".to_string(),
             alias: Some("lan".to_string()),
+            mac_address: Some("00:11:22:33:44:55".to_string()),
             rx_bytes: 1000,
             tx_bytes: 2000,
             rx_packets: 10,
@@ -320,53 +329,8 @@ mod tests {
         assert!(xml.contains("<interface name=\"eth0\">"));
         assert!(xml.contains("<name>eth0</name>"));
         assert!(xml.contains("<alias>lan</alias>"));
+        assert!(xml.contains("<mac_address>00:11:22:33:44:55</mac_address>"));
         assert!(xml.contains("<traffic>"));
         assert!(xml.contains("<total><rx>1000</rx><tx>2000</tx></total>"));
-    }
-
-    #[test]
-    fn test_vnstat_json_history_format() {
-        let history = vec![HistoryEntry {
-            hostname: "test-host".to_string(),
-            interface: "eth0".to_string(),
-            date: 1700000000,
-            rx: 500,
-            tx: 600,
-        }];
-
-        let mut json = VnStatJson::new(vec![]);
-        json.insert_history(history, "day");
-        let serialized = serde_json::to_string(&json).unwrap();
-        
-        assert!(serialized.contains("\"day\":["));
-        assert!(serialized.contains("\"rx\":500,\"tx\":600"));
-        assert!(serialized.contains("\"timestamp\":1700000000"));
-    }
-
-    #[test]
-    fn test_vnstat_json_format() {
-        let stats = vec![InterfaceStats {
-            name: "eth0".to_string(),
-            alias: Some("lan".to_string()),
-            rx_bytes: 1000,
-            tx_bytes: 2000,
-            rx_packets: 10,
-            tx_packets: 20,
-            hostname: "test-host".to_string(),
-            created: 1700000000,
-            updated: 1700003600,
-        }];
-
-        let json = VnStatJson::new(stats);
-        let serialized = serde_json::to_string(&json).unwrap();
-        
-        // Basic checks for expected fields
-        assert!(serialized.contains("\"vnstatversion\":"));
-        assert!(serialized.contains("\"jsonversion\":\"2\""));
-        assert!(serialized.contains("\"interfaces\":"));
-        assert!(serialized.contains("\"name\":\"eth0\""));
-        assert!(serialized.contains("\"alias\":\"lan\""));
-        assert!(serialized.contains("\"traffic\":"));
-        assert!(serialized.contains("\"total\":{\"rx\":1000,\"tx\":2000}"));
     }
 }

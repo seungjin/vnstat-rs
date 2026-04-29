@@ -151,6 +151,18 @@ struct Cli {
     #[arg(short, long, value_name = "iface")]
     iface: Option<String>,
 
+    /// Select host
+    #[arg(long, value_name = "hostname")]
+    host: Option<String>,
+
+    /// Show statistics for all hosts
+    #[arg(long)]
+    host_all: bool,
+
+    /// List all hosts in database
+    #[arg(long)]
+    host_list: bool,
+
     /// Show 5 minutes statistics
     #[arg(short = '5', long = "fiveminutes", num_args = 0..=1)]
     fiveminutes: Option<Option<usize>>,
@@ -232,16 +244,12 @@ struct Cli {
     dbdir: Option<PathBuf>,
 
     /// Path to config file
-    #[arg(short, long, value_name = "FILE")]
+    #[arg(short = 'n', long, value_name = "FILE")]
     config: Option<PathBuf>,
 
-    /// Get a value from the universal config table
-    #[arg(long, value_name = "NAME")]
-    get: Option<String>,
-
-    /// Set a value in the universal config table
-    #[arg(long, num_args = 2, value_names = ["NAME", "VALUE"])]
-    set: Option<Vec<String>>,
+    /// Show daemon information
+    #[arg(long)]
+    info: bool,
 }
 
 #[tokio::main]
@@ -255,7 +263,7 @@ async fn main() -> Result<()> {
     }
 
     if cli.version {
-        println!("vnStat-rs {} by Seungjin Kim (Turso {})", env!("CARGO_PKG_VERSION"), env!("TURSO_VERSION"));
+        println!("vnStat-rs {} by Seungjin Kim", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 
@@ -281,17 +289,12 @@ async fn main() -> Result<()> {
         match vnstat_rs::load_config(&etc_config) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                println!("Permission denied reading {}, trying {}...", etc_config.display(), user_config.display());
                 match vnstat_rs::load_config(&user_config) {
                     Ok(c) => c,
-                    Err(ue) => {
-                        eprintln!("Could not read {} (permission denied or not exist) and {} ({}).", etc_config.display(), user_config.display(), ue);
-                        vnstat_rs::get_default_config(is_root)
-                    }
+                    Err(_) => vnstat_rs::get_default_config(is_root)
                 }
             }
             Err(_) => {
-                // Not found or other error, try user config silently if not root
                 if !is_root {
                     match vnstat_rs::load_config(&user_config) {
                         Ok(c) => c,
@@ -311,17 +314,19 @@ async fn main() -> Result<()> {
         else if cli.oneline.is_some() { OutputFormat::Oneline }
         else { OutputFormat::Table };
 
+    // Use machine_id as the default filter for current host
+    let current_machine_id = vnstat_rs::get_machine_id().ok();
+    let host_filter_ipc = if cli.host_all { None } else { cli.host.clone().or_else(|| current_machine_id.clone()) };
+
     // Try to talk to daemon first
     if let Some(ref socket_path) = file_config.daemon_socket {
         if socket_path.exists() {
             let mut requested_table = String::new();
             let mut requested_limit = 0;
-            let req = if let Some(name) = cli.get.clone() {
-                Some(IpcRequest::GetConfig { name })
-            } else if let Some(kv) = cli.set.clone() {
-                if kv.len() == 2 {
-                    Some(IpcRequest::SetConfig { name: kv[0].clone(), value: kv[1].clone() })
-                } else { None }
+            let req = if cli.info {
+                Some(IpcRequest::GetInfo)
+            } else if cli.host_list {
+                Some(IpcRequest::ListHosts)
             } else if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
                 let (table, limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(30)) }
                     else if let Some(l) = cli.hours { ("hour", l.unwrap_or(30)) }
@@ -338,15 +343,16 @@ async fn main() -> Result<()> {
                 Some(IpcRequest::GetHistory { 
                     table: table.to_string(), 
                     interface: cli.iface.clone(), 
+                    host: host_filter_ipc.clone(),
                     limit,
                     begin,
                     end,
                 })
             } else if !cli.update && !cli.init && !cli.iflist {
                 if matches!(format, OutputFormat::Table) {
-                    Some(IpcRequest::GetSummary { interface: cli.iface.clone() })
+                    Some(IpcRequest::GetSummary { interface: cli.iface.clone(), host: host_filter_ipc.clone() })
                 } else {
-                    Some(IpcRequest::GetStats { interface: cli.iface.clone() })
+                    Some(IpcRequest::GetStats { interface: cli.iface.clone(), host: host_filter_ipc.clone() })
                 }
             } else {
                 None
@@ -386,23 +392,36 @@ async fn main() -> Result<()> {
                         }
                         return Ok(());
                     }
-                    Ok(IpcResponse::Config(val)) => {
-                        if let Some(v) = val {
-                            println!("{}", v);
-                        } else {
-                            println!("(not set)");
+                    Ok(IpcResponse::Info { hostname, machine_id, mac_address }) => {
+                        println!("vnStat-rs {} by Seungjin Kim", env!("CARGO_PKG_VERSION"));
+                        println!("Daemon Host: {} ({})", hostname, machine_id);
+                        if let Some(mac) = mac_address {
+                            println!("MAC Address: {}", mac);
                         }
                         return Ok(());
                     }
-                    Ok(IpcResponse::Ok) => {
+                    Ok(IpcResponse::Hosts(hosts)) => {
+                        println!("{:<30} {:<40}", "Hostname", "Machine ID");
+                        println!("{:-<70}", "");
+                        for (name, id) in hosts {
+                            println!("{:<30} {:<40}", name, id);
+                        }
                         return Ok(());
                     }
                     Ok(IpcResponse::Error(e)) => {
                         eprintln!("Daemon error: {}", e);
                     }
+                    Err(e) => {
+                        eprintln!("vnstatd is not working ({:?}): {}", socket_path, e);
+                    }
                     _ => {}
                 }
             }
+        } else {
+             // Socket doesn't exist - if not a purely local command, warn
+             if !cli.update && !cli.init && !cli.iflist {
+                 eprintln!("vnstatd is not working (socket {:?} not found). Falling back to direct database access.", socket_path);
+             }
         }
     }
     
@@ -410,7 +429,7 @@ async fn main() -> Result<()> {
         .or(file_config.database)
         .unwrap_or_else(|| PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
     
-    let db = match Db::open(db_path, None, None).await {
+    let db = match Db::open(db_path, file_config.url.clone(), file_config.token.clone(), file_config.hostname_override.clone()).await {
         Ok(db) => db,
         Err(e) => {
             if e.to_string().contains("locked") {
@@ -439,21 +458,26 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    if let Some(name) = cli.get.as_ref() {
-        if let Some(val) = db.get_info(name).await? {
-            println!("{}", val);
-        } else {
-            println!("(not set)");
+    if cli.info {
+        println!("vnStat-rs {} by Seungjin Kim", env!("CARGO_PKG_VERSION"));
+        println!("Hostname: {}, Machine ID: {}", db.hostname, db.machine_id);
+        if let Ok(Some(mac)) = db.get_info("mac_address").await {
+            println!("MAC Address: {}", mac);
         }
         return Ok(());
     }
 
-    if let Some(kv) = cli.set.as_ref() {
-        if kv.len() == 2 {
-            db.set_info(&kv[0], &kv[1]).await?;
+    if cli.host_list {
+        let hosts = db.get_all_hosts().await?;
+        println!("{:<30} {:<40}", "Hostname", "Machine ID");
+        println!("{:-<70}", "");
+        for (name, id) in hosts {
+            println!("{:<30} {:<40}", name, id);
         }
         return Ok(());
     }
+
+    let final_host_filter = if cli.host_all { None } else { cli.host.as_deref().or(current_machine_id.as_deref()) };
 
     if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
         let (table, limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(30)) }
@@ -466,7 +490,7 @@ async fn main() -> Result<()> {
         let begin = cli.begin.as_deref().and_then(parse_date_arg);
         let end = cli.end.as_deref().and_then(parse_date_arg);
 
-        let history = db.get_history(table, cli.iface.as_deref(), limit, begin, end).await?;
+        let history = db.get_history(table, cli.iface.as_deref(), final_host_filter, limit, begin, end).await?;
         
         match format {
             OutputFormat::Json => println!("{}", serde_json::to_string(&vnstat_rs::VnStatJson::from_history(history, table))?),
@@ -484,7 +508,7 @@ async fn main() -> Result<()> {
     }
 
     if !matches!(format, OutputFormat::Table) {
-        let stats = db.get_all_interface_stats(cli.iface.as_deref()).await?;
+        let stats = db.get_all_interface_stats(cli.iface.as_deref(), final_host_filter).await?;
         match format {
             OutputFormat::Json => println!("{}", serde_json::to_string(&vnstat_rs::VnStatJson::new(stats))?),
             OutputFormat::Xml => println!("{}", vnstat_rs::VnStatJson::new(stats).to_xml()),
@@ -499,7 +523,7 @@ async fn main() -> Result<()> {
     }
 
     // Default Table view (vnstat summary)
-    let summaries = db.get_summary(cli.iface.as_deref()).await?;
+    let summaries = db.get_summary(cli.iface.as_deref(), final_host_filter).await?;
     print_summary_table(summaries);
 
     Ok(())
@@ -507,11 +531,18 @@ async fn main() -> Result<()> {
 
 fn print_summary_table(summaries: Vec<vnstat_rs::SummaryData>) {
     if summaries.is_empty() {
-        println!("No interfaces found.");
+        println!("No data available for the selected host(s).");
         return;
     }
 
-    println!("\n                      rx      /      tx      /     total    /   estimated");
+    // Group by hostname
+    let mut by_host: std::collections::HashMap<String, Vec<vnstat_rs::SummaryData>> = std::collections::HashMap::new();
+    for s in summaries {
+        by_host.entry(s.hostname.clone()).or_default().push(s);
+    }
+
+    let mut hostnames: Vec<_> = by_host.keys().cloned().collect();
+    hostnames.sort();
 
     let now = chrono::Utc::now();
     let now_ts = now.timestamp();
@@ -529,55 +560,64 @@ fn print_summary_table(summaries: Vec<vnstat_rs::SummaryData>) {
     };
     let last_month_ts = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(last_month_date.and_hms_opt(0, 0, 0).unwrap(), chrono::Utc).timestamp();
 
-    for summary in summaries {
-        println!(" {}:", summary.name);
+    for hostname in hostnames {
+        println!("\n Host: {}", hostname);
+        println!("                      rx      /      tx      /     total    /   estimated");
+        
+        let mut host_summaries = by_host.remove(&hostname).unwrap();
+        host_summaries.sort_by(|a, b| a.name.cmp(&b.name));
 
-        // Helper to print line
-        let print_line = |label: &str, rx: u64, tx: u64, est: Option<String>| {
-            let total = rx + tx;
-            print!("    {:<12} {:>10}  /  {:>10}  /  {:>10}", 
-                label, format_bytes_short(rx), format_bytes_short(tx), format_bytes_short(total));
-            if let Some(e) = est {
-                println!("  /  {:>10}", e);
+        for summary in host_summaries {
+            println!("   {}:", summary.name);
+
+            // Helper to print line
+            let print_line = |label: &str, rx: u64, tx: u64, est: Option<String>| {
+                let total = rx + tx;
+                print!("      {:<12} {:>10}  /  {:>10}  /  {:>10}", 
+                    label, format_bytes_short(rx), format_bytes_short(tx), format_bytes_short(total));
+                if let Some(e) = est {
+                    println!("  /  {:>10}", e);
+                } else {
+                    println!();
+                }
+            };
+
+            // Monthly lines
+            let last_month_label = chrono::DateTime::from_timestamp(last_month_ts, 0).unwrap().format("%Y-%m").to_string();
+            let (lm_rx, lm_tx) = summary.last_month;
+            print_line(&last_month_label, lm_rx, lm_tx, None);
+
+            let this_month_label = chrono::DateTime::from_timestamp(this_month_ts, 0).unwrap().format("%Y-%m").to_string();
+            let (tm_rx, tm_tx) = summary.this_month;
+            
+            // Month estimation
+            let days_in_month = {
+                use chrono::Datelike;
+                match now.month() {
+                    1|3|5|7|8|10|12 => 31,
+                    4|6|9|11 => 30,
+                    2 => if (now.year() % 4 == 0 && now.year() % 100 != 0) || (now.year() % 400 == 0) { 29 } else { 28 },
+                    _ => 30,
+                }
+            };
+            let current_day = now.day() as f64;
+            let tm_est = if current_day > 0.0 {
+                format_bytes_short(((tm_rx + tm_tx) as f64 * (days_in_month as f64 / current_day)) as u64)
             } else {
-                println!();
-            }
-        };
+                "--".to_string()
+            };
+            print_line(&this_month_label, tm_rx, tm_tx, Some(tm_est));
 
-        // Monthly lines
-        let last_month_label = chrono::DateTime::from_timestamp(last_month_ts, 0).unwrap().format("%Y-%m").to_string();
-        let (lm_rx, lm_tx) = summary.last_month;
-        print_line(&last_month_label, lm_rx, lm_tx, None);
+            // Yesterday
+            let (y_rx, y_tx) = summary.yesterday;
+            print_line("yesterday", y_rx, y_tx, None);
 
-        let this_month_label = chrono::DateTime::from_timestamp(this_month_ts, 0).unwrap().format("%Y-%m").to_string();
-        let (tm_rx, tm_tx) = summary.this_month;
-        
-        // Month estimation
-        let days_in_month = match now.month() {
-            1|3|5|7|8|10|12 => 31,
-            4|6|9|11 => 30,
-            2 => if (now.year() % 4 == 0 && now.year() % 100 != 0) || (now.year() % 400 == 0) { 29 } else { 28 },
-            _ => 30,
-        };
-        let current_day = now.day() as f64;
-        let tm_est = if current_day > 0.0 {
-            format_bytes_short(((tm_rx + tm_tx) as f64 * (days_in_month as f64 / current_day)) as u64)
-        } else {
-            "--".to_string()
-        };
-        print_line(&this_month_label, tm_rx, tm_tx, Some(tm_est));
-
-        // Yesterday
-        let (y_rx, y_tx) = summary.yesterday;
-        print_line("yesterday", y_rx, y_tx, None);
-
-        // Today
-        let (t_rx, t_tx) = summary.today;
-        let secs_passed = (now_ts - today_ts).max(1) as f64;
-        let t_est = format_bytes_short(((t_rx + t_tx) as f64 * (86400.0 / secs_passed)) as u64);
-        print_line("today", t_rx, t_tx, Some(t_est));
-        
-        println!();
+            // Today
+            let (t_rx, t_tx) = summary.today;
+            let secs_passed = (now_ts - today_ts).max(1) as f64;
+            let t_est = format_bytes_short(((t_rx + t_tx) as f64 * (86400.0 / secs_passed)) as u64);
+            print_line("today", t_rx, t_tx, Some(t_est));
+        }
     }
 }
 
@@ -600,15 +640,18 @@ fn format_bytes_short(bytes: u64) -> String {
     }
 }
 
-fn print_history_table(table: &str, history: Vec<vnstat_rs::HistoryEntry>, limit: usize) {
+fn print_history_table(table: &str, mut history: Vec<vnstat_rs::HistoryEntry>, limit: usize) {
     if history.is_empty() {
         println!("No data available.");
         return;
     }
 
+    // Sort ASC for display as requested
+    history.sort_by_key(|h| h.date);
+
     // Group by interface for better output if multiple are present
-    let mut by_interface: std::collections::HashMap<String, Vec<&vnstat_rs::HistoryEntry>> = std::collections::HashMap::new();
-    for entry in &history {
+    let mut by_interface: std::collections::HashMap<String, Vec<vnstat_rs::HistoryEntry>> = std::collections::HashMap::new();
+    for entry in history {
         by_interface.entry(entry.interface.clone()).or_default().push(entry);
     }
 
@@ -630,17 +673,17 @@ fn print_history_table(table: &str, history: Vec<vnstat_rs::HistoryEntry>, limit
             _ => table.to_string(),
         };
 
-        println!("\n {:<10} / {:<10}\n", iface, title);
+        println!(" {}  /  {}\n", iface, title);
         
         let label_header = match table {
             "fiveminute" | "hour" => "      time  ",
             "day" => "      day   ",
-            "month" => "     month  ",
-            "year" => "     year   ",
+            "month" => "        month",
+            "year" => "        year ",
             _ => "      date  ",
         };
 
-        println!(" {:<12} {:>10} | {:>10} | {:>10} | {:>12}", 
+        println!(" {:<14} {:>10} | {:>10} | {:>10} | {:>12}", 
             label_header, "rx", "tx", "total", "avg. rate");
         println!("     ------------------------+-------------+-------------+---------------");
 
@@ -683,14 +726,14 @@ fn print_history_table(table: &str, history: Vec<vnstat_rs::HistoryEntry>, limit
             let rate_bits = (total * 8) as f64 / seconds as f64;
             let rate_str = format_rate(rate_bits);
 
-            println!("       {:<10} {:>10} | {:>10} | {:>10} | {:>12}", 
+            println!("       {:<10} {:>10} | {:>11} | {:>11} | {:>14}", 
                 label, format_bytes_short(entry.rx), format_bytes_short(entry.tx), format_bytes_short(total), rate_str);
         }
 
         println!("     ------------------------+-------------+-------------+---------------");
 
         // Estimation for current period
-        if let Some(latest) = entries.first() {
+        if let Some(latest) = entries.last() {
             use chrono::Datelike;
             let dt = chrono::DateTime::from_timestamp(latest.date, 0).unwrap();
             let is_current = match table {
@@ -732,7 +775,7 @@ fn print_history_table(table: &str, history: Vec<vnstat_rs::HistoryEntry>, limit
                     let est_tx = (latest.tx as f64 * (total_secs / secs_passed)) as u64;
                     let est_total = est_rx + est_tx;
 
-                    println!("     {:<12} {:>10} | {:>10} | {:>10} |", 
+                    println!("     {:<12} {:>10} | {:>11} | {:>11} |", 
                         "estimated", format_bytes_short(est_rx), format_bytes_short(est_tx), format_bytes_short(est_total));
                 }
             }
@@ -742,7 +785,7 @@ fn print_history_table(table: &str, history: Vec<vnstat_rs::HistoryEntry>, limit
 
 fn format_rate(bits_per_sec: f64) -> String {
     if bits_per_sec >= 1_000_000_000.0 {
-        format!("{:.2} Gbit/s", bits_per_sec / 1_000_000_000.0)
+        format!("{:.2} Mbit/s", bits_per_sec / 1_000_000.0) // vnstat uses Mbit even for high rates
     } else if bits_per_sec >= 1_000_000.0 {
         format!("{:.2} Mbit/s", bits_per_sec / 1_000_000.0)
     } else if bits_per_sec >= 1_000.0 {

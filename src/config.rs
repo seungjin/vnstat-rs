@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::fs;
+use crate::utils::expand_tilde;
 
 #[derive(Default, Debug)]
 pub struct Config {
@@ -9,6 +10,7 @@ pub struct Config {
     pub update_interval: u64,
     pub sync_interval: u64,
     pub daemon_socket: Option<PathBuf>,
+    pub hostname_override: Option<String>,
 }
 
 pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
@@ -39,17 +41,18 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
         let value = parts[1].trim_matches('"');
 
         match key {
-            "DatabaseDir" => database_dir = Some(PathBuf::from(value)),
+            "DatabaseDir" => database_dir = Some(expand_tilde(value)),
             "Database" => database_file = Some(value.to_string()),
-            "TursoUrl" => config.url = Some(value.to_string()),
-            "TursoToken" => config.token = Some(value.to_string()),
+            "TursoUrl" | "LibsqlUrl" => config.url = Some(value.to_string()),
+            "TursoToken" | "LibsqlToken" => config.token = Some(value.to_string()),
             "UpdateInterval" => {
                 if let Ok(v) = value.parse() { config.update_interval = v; }
             }
             "SyncInterval" => {
                 if let Ok(v) = value.parse() { config.sync_interval = v; }
             }
-            "DaemonSocket" => config.daemon_socket = Some(PathBuf::from(value)),
+            "DaemonSocket" => config.daemon_socket = Some(expand_tilde(value)),
+            "Hostname" => config.hostname_override = Some(value.to_string()),
             _ => {}
         }
     }
@@ -57,7 +60,7 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
     // Combine DatabaseDir and Database if both are present, or use what's available
     config.database = match (database_dir, database_file) {
         (Some(dir), Some(file)) => Some(dir.join(file)),
-        (None, Some(file)) => Some(PathBuf::from(file)),
+        (None, Some(file)) => Some(expand_tilde(file)),
         (Some(dir), None) => Some(dir.join("vnstat-rs.db")),
         (None, None) => {
             if is_root {
