@@ -307,6 +307,7 @@ async fn main() -> Result<()> {
     if let Some(ref socket_path) = file_config.daemon_socket {
         if socket_path.exists() {
             let mut requested_table = String::new();
+            let mut requested_limit = 0;
             let req = if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
                 let (table, limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(30)) }
                     else if let Some(l) = cli.hours { ("hour", l.unwrap_or(30)) }
@@ -316,6 +317,7 @@ async fn main() -> Result<()> {
                     else { ("top", cli.top.unwrap().unwrap_or(10)) };
                 
                 requested_table = table.to_string();
+                requested_limit = limit;
                 let begin = cli.begin.as_deref().and_then(parse_date_arg);
                 let end = cli.end.as_deref().and_then(parse_date_arg);
 
@@ -365,7 +367,7 @@ async fn main() -> Result<()> {
                                 }
                             }
                             OutputFormat::Table => {
-                                print_history_table(&requested_table, history);
+                                print_history_table(&requested_table, history, requested_limit);
                             }
                         }
                         return Ok(());
@@ -434,7 +436,7 @@ async fn main() -> Result<()> {
                 }
             }
             OutputFormat::Table => {
-                print_history_table(table, history);
+                print_history_table(table, history, limit);
             }
         }
         return Ok(());
@@ -557,7 +559,7 @@ fn format_bytes_short(bytes: u64) -> String {
     }
 }
 
-fn print_history_table(table: &str, history: Vec<vnstat_rs::HistoryEntry>) {
+fn print_history_table(table: &str, history: Vec<vnstat_rs::HistoryEntry>, limit: usize) {
     if history.is_empty() {
         println!("No data available.");
         return;
@@ -578,13 +580,13 @@ fn print_history_table(table: &str, history: Vec<vnstat_rs::HistoryEntry>) {
     for iface in interfaces {
         let entries = by_interface.get(&iface).unwrap();
         let title = match table {
-            "fiveminute" => "five minute",
-            "hour" => "hourly",
-            "day" => "daily",
-            "month" => "monthly",
-            "year" => "yearly",
-            "top" => "top 10",
-            _ => table,
+            "fiveminute" => "five minute".to_string(),
+            "hour" => "hourly".to_string(),
+            "day" => "daily".to_string(),
+            "month" => "monthly".to_string(),
+            "year" => "yearly".to_string(),
+            "top" => format!("top {}", limit),
+            _ => table.to_string(),
         };
 
         println!("\n {:<10} / {:<10}\n", iface, title);
