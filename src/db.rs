@@ -16,11 +16,11 @@ pub struct Db {
     pub conn: turso::Connection,
     pub hostname: String,
     pub machine_id: String,
-    pub host_id: i64,
+    pub host_id: String,
 }
 
 const SCHEMA_SQL: &str = include_str!("../schema.sql");
-const CURRENT_VERSION: i32 = 3;
+const CURRENT_VERSION: i32 = 4;
 
 impl Db {
     pub async fn open(path: PathBuf, url: Option<String>, token: Option<String>) -> Result<Self> {
@@ -54,7 +54,7 @@ impl Db {
         let hostname = hostname::get()?.to_string_lossy().to_string();
         let machine_id = get_machine_id()?;
 
-        let mut db_obj = Self { db: db_type, conn, hostname, machine_id, host_id: 0 };
+        let mut db_obj = Self { db: db_type, conn, hostname, machine_id, host_id: String::new() };
         db_obj.init_schema().await?;
         db_obj.host_id = db_obj.get_or_create_host().await?;
 
@@ -100,103 +100,91 @@ impl Db {
     }
 
     pub async fn init_schema(&self) -> Result<()> {
-        self.execute_batch(SCHEMA_SQL).await?;
-
         let mut rows = self.conn.query("SELECT value FROM info WHERE name = 'version'", ()).await?;
         let mut version: i32 = if let Some(row) = rows.next().await? {
             row.get::<String>(0)?.parse().unwrap_or(1)
         } else {
-            1
+            0
         };
 
         if version < CURRENT_VERSION {
-            println!("Migrating database from version {} to {}...", version, CURRENT_VERSION);
-            if version == 2 {
-                let mut rows = self.conn.query("PRAGMA table_info(interface)", ()).await?;
-                let mut has_host_id = false;
-                while let Some(row) = rows.next().await? {
-                    let name: String = row.get(1)?;
-                    if name == "host_id" {
-                        has_host_id = true;
-                        break;
-                    }
+            if version == 0 {
+                self.execute_batch(SCHEMA_SQL).await?;
+                self.conn.execute("INSERT OR IGNORE INTO info (name, value) VALUES ('version', '4')", ()).await?;
+            } else {
+                println!("Migrating database from version {} to {}...", version, CURRENT_VERSION);
+                
+                if version == 2 {
+                    version = 3;
                 }
 
-                if !has_host_id {
-                    println!("Applying v3 migration: Normalizing interface table with host_id...");
-                    self.execute_batch("DROP TABLE IF EXISTS interface_old").await?;
-                    self.conn.execute("ALTER TABLE interface RENAME TO interface_old", ()).await?;
+                if version == 3 {
+                    println!("Applying v4 migration: Converting IDs to TEXT for multi-host sync support...");
+                    
+                    let tables = vec!["host", "interface", "fiveminute", "hour", "day", "month", "year", "top"];
+                    for table in &tables {
+                        self.execute_batch(&format!("DROP TABLE IF EXISTS {}_old", table)).await?;
+                        let _ = self.conn.execute(&format!("ALTER TABLE {} RENAME TO {}_old", table, table), ()).await;
+                    }
+
+                    self.execute_batch(SCHEMA_SQL).await?;
+
+                    self.execute_batch("INSERT INTO host (id, machine_id, hostname) SELECT machine_id, machine_id, hostname FROM host_old").await?;
+
                     self.execute_batch("
-                        CREATE TABLE interface (
-                            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                            host_id      INTEGER NOT NULL REFERENCES host(id) ON DELETE CASCADE,
-                            name         TEXT NOT NULL,
-                            alias        TEXT,
-                            active       INTEGER NOT NULL DEFAULT 1,
-                            created      INTEGER NOT NULL,
-                            updated      INTEGER NOT NULL,
-                            rxcounter    INTEGER NOT NULL DEFAULT 0,
-                            txcounter    INTEGER NOT NULL DEFAULT 0,
-                            rxtotal      INTEGER NOT NULL DEFAULT 0,
-                            txtotal      INTEGER NOT NULL DEFAULT 0,
-                            CONSTRAINT u_host_name UNIQUE(host_id, name)
-                        );
+                        INSERT INTO interface (id, host_id, name, alias, active, created, updated, rxcounter, txcounter, rxtotal, txtotal)
+                        SELECT h.machine_id || ':' || i.name, h.machine_id, i.name, i.alias, i.active, i.created, i.updated, i.rxcounter, i.txcounter, i.rxtotal, i.txtotal
+                        FROM interface_old i JOIN host_old h ON i.host_id = h.id
                     ").await?;
 
-                    self.conn.execute(
-                        "INSERT OR IGNORE INTO host (machine_id, hostname) VALUES (?, ?)",
-                        (self.machine_id.clone(), self.hostname.clone()),
-                    ).await?;
-                    
-                    let mut host_rows = self.conn.query("SELECT id FROM host WHERE machine_id = ?", (self.machine_id.clone(),)).await?;
-                    if let Some(host_row) = host_rows.next().await? {
-                        let host_id: i64 = host_row.get(0)?;
-                        self.conn.execute(
-                            &format!("INSERT INTO interface (id, host_id, name, alias, active, created, updated, rxcounter, txcounter, rxtotal, txtotal) 
-                                     SELECT id, {}, name, alias, active, created, updated, rxcounter, txcounter, rxtotal, txtotal FROM interface_old", host_id),
-                            (),
-                        ).await?;
+                    for table in &vec!["fiveminute", "hour", "day", "month", "year", "top"] {
+                        self.execute_batch(&format!("
+                            INSERT INTO {} (interface, date, rx, tx)
+                            SELECT h.machine_id || ':' || i.name, t.date, t.rx, t.tx
+                            FROM {}_old t
+                            JOIN interface_old i ON t.interface = i.id
+                            JOIN host_old h ON i.host_id = h.id
+                        ", table, table)).await?;
                     }
-                    let _ = self.conn.execute("DROP TABLE interface_old", ()).await;
-                }
-                version = 3;
-            }
 
-            self.conn.execute(
-                "UPDATE info SET value = ? WHERE name = 'version'",
-                (version.to_string(),),
-            ).await?;
-            println!("Migration to version {} complete.", version);
+                    for table in &tables {
+                        let _ = self.conn.execute(&format!("DROP TABLE {}_old", table), ()).await;
+                    }
+                    
+                    version = 4;
+                }
+
+                self.conn.execute(
+                    "UPDATE info SET value = ? WHERE name = 'version'",
+                    (version.to_string(),),
+                ).await?;
+                println!("Migration to version {} complete.", version);
+            }
+        } else {
+            self.execute_batch(SCHEMA_SQL).await?;
         }
+
         Ok(())
     }
 
-    pub async fn get_or_create_host(&self) -> Result<i64> {
+    pub async fn get_or_create_host(&self) -> Result<String> {
         self.conn.execute(
-            "INSERT OR IGNORE INTO host (machine_id, hostname) VALUES (?, ?)",
-            (self.machine_id.clone(), self.hostname.clone()),
+            "INSERT OR IGNORE INTO host (id, machine_id, hostname) VALUES (?, ?, ?)",
+            (self.machine_id.clone(), self.machine_id.clone(), self.hostname.clone()),
         ).await?;
 
         self.conn.execute(
-            "UPDATE host SET hostname = ? WHERE machine_id = ?",
+            "UPDATE host SET hostname = ? WHERE id = ?",
             (self.hostname.clone(), self.machine_id.clone()),
         ).await?;
 
-        let mut rows = self.conn.query(
-            "SELECT id FROM host WHERE machine_id = ?",
-            (self.machine_id.clone(),),
-        ).await?;
-
-        if let Some(row) = rows.next().await? {
-            return Ok(row.get(0)?);
-        }
-        Err(anyhow::anyhow!("Failed to get or create host"))
+        Ok(self.machine_id.clone())
     }
 
-    pub async fn get_interface(&self, name: &str) -> Result<Option<(i64, u64, u64)>> {
+    pub async fn get_interface(&self, name: &str) -> Result<Option<(String, u64, u64)>> {
         let mut rows = self.conn.query(
             "SELECT id, rxcounter, txcounter FROM interface WHERE host_id = ? AND name = ?", 
-            (self.host_id, name)
+            (self.host_id.clone(), name)
         ).await?;
         
         if let Some(row) = rows.next().await? {
@@ -205,25 +193,18 @@ impl Db {
         Ok(None)
     }
 
-    pub async fn create_interface(&self, name: &str, rx: u64, tx: u64) -> Result<i64> {
+    pub async fn create_interface(&self, name: &str, rx: u64, tx: u64) -> Result<String> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let id = format!("{}:{}", self.host_id, name);
         self.conn.execute(
-            "INSERT INTO interface (host_id, name, created, updated, rxcounter, txcounter) VALUES (?, ?, ?, ?, ?, ?)",
-            (self.host_id, name, now, now, rx as i64, tx as i64),
+            "INSERT INTO interface (id, host_id, name, created, updated, rxcounter, txcounter) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (id.clone(), self.host_id.clone(), name, now, now, rx as i64, tx as i64),
         ).await?;
 
-        let mut rows = self.conn.query(
-            "SELECT id FROM interface WHERE host_id = ? AND name = ?", 
-            (self.host_id, name)
-        ).await?;
-        
-        if let Some(row) = rows.next().await? {
-            return Ok(row.get(0)?);
-        }
-        Err(anyhow::anyhow!("Failed to create interface"))
+        Ok(id)
     }
 
-    pub async fn update_interface_counters(&self, id: i64, rx: u64, tx: u64, rx_delta: u64, tx_delta: u64) -> Result<()> {
+    pub async fn update_interface_counters(&self, id: &str, rx: u64, tx: u64, rx_delta: u64, tx_delta: u64) -> Result<()> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         self.conn.execute(
             "UPDATE interface SET updated = ?, rxcounter = ?, txcounter = ?, rxtotal = rxtotal + ?, txtotal = txtotal + ? WHERE id = ?",
@@ -232,7 +213,7 @@ impl Db {
         Ok(())
     }
 
-    pub async fn add_traffic(&self, interface_id: i64, table: &str, date: i64, rx: u64, tx: u64) -> Result<()> {
+    pub async fn add_traffic(&self, interface_id: &str, table: &str, date: i64, rx: u64, tx: u64) -> Result<()> {
         self.conn.execute(
             &format!(
                 "INSERT INTO {} (interface, date, rx, tx) VALUES (?, ?, ?, ?)
@@ -267,29 +248,29 @@ impl Db {
                 };
 
                 if rx_delta > 0 || tx_delta > 0 {
-                    self.update_interface_counters(id, stat.rx_bytes, stat.tx_bytes, rx_delta, tx_delta).await?;
+                    self.update_interface_counters(&id, stat.rx_bytes, stat.tx_bytes, rx_delta, tx_delta).await?;
                     let dt = chrono::DateTime::from_timestamp(now, 0).unwrap();
                     let naive = dt.naive_utc();
 
                     let five_min = (now / 300) * 300;
-                    self.add_traffic(id, "fiveminute", five_min, rx_delta, tx_delta).await?;
+                    self.add_traffic(&id, "fiveminute", five_min, rx_delta, tx_delta).await?;
 
                     let hour = (now / 3600) * 3600;
-                    self.add_traffic(id, "hour", hour, rx_delta, tx_delta).await?;
+                    self.add_traffic(&id, "hour", hour, rx_delta, tx_delta).await?;
 
                     let day_dt = naive.date().and_hms_opt(0, 0, 0).unwrap();
                     let day = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(day_dt, chrono::Utc).timestamp();
-                    self.add_traffic(id, "day", day, rx_delta, tx_delta).await?;
+                    self.add_traffic(&id, "day", day, rx_delta, tx_delta).await?;
 
                     let month_dt = naive.date().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
                     let month = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(month_dt, chrono::Utc).timestamp();
-                    self.add_traffic(id, "month", month, rx_delta, tx_delta).await?;
+                    self.add_traffic(&id, "month", month, rx_delta, tx_delta).await?;
 
                     let year_dt = naive.date().with_day(1).unwrap().with_month(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
                     let year = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(year_dt, chrono::Utc).timestamp();
-                    self.add_traffic(id, "year", year, rx_delta, tx_delta).await?;
+                    self.add_traffic(&id, "year", year, rx_delta, tx_delta).await?;
 
-                    self.add_traffic(id, "top", day, rx_delta, tx_delta).await?;
+                    self.add_traffic(&id, "top", day, rx_delta, tx_delta).await?;
                     println!("Updated {}: +rx={} +tx={}", stat.name, format_bytes(rx_delta), format_bytes(tx_delta));
                 }
             } else {
@@ -366,16 +347,16 @@ impl Db {
     }
 
     pub async fn get_summary(&self, filter_iface: Option<&str>) -> Result<Vec<SummaryData>> {
-        let mut ifaces_query = "SELECT id, name FROM interface".to_string();
+        let mut ifaces_query = format!("SELECT id, name FROM interface WHERE host_id = '{}'", self.host_id);
         if let Some(iface) = filter_iface {
-            ifaces_query.push_str(&format!(" WHERE name = '{}'", iface));
+            ifaces_query.push_str(&format!(" AND name = '{}'", iface));
         }
         ifaces_query.push_str(" ORDER BY name");
 
         let mut iface_rows = self.conn.query(&ifaces_query, ()).await?;
         let mut interfaces = Vec::new();
         while let Some(row) = iface_rows.next().await? {
-            interfaces.push((row.get::<i64>(0)?, row.get::<String>(1)?));
+            interfaces.push((row.get::<String>(0)?, row.get::<String>(1)?));
         }
 
         let now = chrono::Utc::now();
@@ -398,7 +379,7 @@ impl Db {
         for (id, name) in interfaces {
             let mut stats = std::collections::HashMap::new();
             
-            let mut m_rows = self.conn.query("SELECT date, rx, tx FROM month WHERE interface = ? AND date IN (?, ?)", (id, this_month_ts, last_month_ts)).await?;
+            let mut m_rows = self.conn.query("SELECT date, rx, tx FROM month WHERE interface = ? AND date IN (?, ?)", (id.clone(), this_month_ts, last_month_ts)).await?;
             while let Some(row) = m_rows.next().await? {
                 stats.insert(format!("m_{}", row.get::<i64>(0)?), (row.get::<i64>(1)? as u64, row.get::<i64>(2)? as u64));
             }
