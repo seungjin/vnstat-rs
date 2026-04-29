@@ -47,6 +47,71 @@ impl Db {
         Ok(())
     }
 
+    pub async fn prune_stats(&self, config: &crate::config::Config) -> Result<()> {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+
+        // 5-minute data
+        let five_min_cutoff = now - (config.five_minute_hours as i64 * 3600);
+        let sql5 = "DELETE FROM fiveminute WHERE date < ?";
+        self.local_conn.execute(sql5, [five_min_cutoff]).await?;
+        if let Some(ref remote) = self.remote_conn {
+            let _ = remote.execute(sql5, [five_min_cutoff]).await;
+        }
+
+        // Hourly data
+        let hourly_cutoff = now - (config.hourly_days as i64 * 86400);
+        let sqlh = "DELETE FROM hour WHERE date < ?";
+        self.local_conn.execute(sqlh, [hourly_cutoff]).await?;
+        if let Some(ref remote) = self.remote_conn {
+            let _ = remote.execute(sqlh, [hourly_cutoff]).await;
+        }
+
+        // Daily data
+        let daily_cutoff = now - (config.daily_days as i64 * 86400);
+        let sqld = "DELETE FROM day WHERE date < ?";
+        self.local_conn.execute(sqld, [daily_cutoff]).await?;
+        if let Some(ref remote) = self.remote_conn {
+            let _ = remote.execute(sqld, [daily_cutoff]).await;
+        }
+
+        // Monthly data (approximate 30 days per month for simplicity of cutoff)
+        let monthly_cutoff = now - (config.monthly_months as i64 * 30 * 86400);
+        let sqlm = "DELETE FROM month WHERE date < ?";
+        self.local_conn.execute(sqlm, [monthly_cutoff]).await?;
+        if let Some(ref remote) = self.remote_conn {
+            let _ = remote.execute(sqlm, [monthly_cutoff]).await;
+        }
+
+        // Yearly data
+        if config.yearly_years >= 0 {
+            let yearly_cutoff = now - (config.yearly_years as i64 * 365 * 86400);
+            let sqly = "DELETE FROM year WHERE date < ?";
+            self.local_conn.execute(sqly, [yearly_cutoff]).await?;
+            if let Some(ref remote) = self.remote_conn {
+                let _ = remote.execute(sqly, [yearly_cutoff]).await;
+            }
+        }
+
+        // Top days (keep only top N entries per interface)
+        let mut rows = self.local_conn.query("SELECT DISTINCT interface FROM top", params![]).await?;
+        let mut interfaces = Vec::new();
+        while let Some(row) = rows.next().await? {
+            interfaces.push(row.get::<String>(0)?);
+        }
+
+        for iface_id in interfaces {
+            let delete_sql = "DELETE FROM top WHERE interface = ? AND date NOT IN (
+                    SELECT date FROM top WHERE interface = ? ORDER BY (rx + tx) DESC LIMIT ?
+                )";
+            self.local_conn.execute(delete_sql, (iface_id.clone(), iface_id.clone(), config.top_day_entries as i64)).await?;
+            if let Some(ref remote) = self.remote_conn {
+                let _ = remote.execute(delete_sql, (iface_id.clone(), iface_id.clone(), config.top_day_entries as i64)).await;
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn update_stats(&self, filter_iface: Option<&str>) -> Result<()> {
         let stats = parse_net_dev()?;
         let mut seen_ids = std::collections::HashSet::new();

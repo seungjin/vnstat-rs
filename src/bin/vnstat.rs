@@ -450,11 +450,11 @@ async fn main() -> Result<()> {
     }
     
     let db_path = cli.dbdir
-        .or(file_config.database)
+        .or(file_config.database.clone())
         .unwrap_or_else(|| PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
     
     // Determine if we need a remote connection
-    let (url, token) = if cli.host.is_some() || cli.host_all {
+    let (url, token) = if cli.host.is_some() || cli.host_all || cli.update {
         (file_config.url.clone(), file_config.token.clone())
     } else {
         (None, None)
@@ -477,6 +477,7 @@ async fn main() -> Result<()> {
 
     if cli.update {
         db.update_stats(cli.iface.as_deref()).await?;
+        db.prune_stats(&file_config).await?;
         return Ok(());
     }
 

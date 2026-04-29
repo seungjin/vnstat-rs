@@ -232,6 +232,11 @@ async fn main() -> Result<()> {
             eprintln!("Error updating stats: {}", e);
         }
 
+        // Apply data retention pruning
+        if let Err(e) = db_loop.prune_stats(&file_config).await {
+            eprintln!("Error pruning stats: {}", e);
+        }
+
         if sync_interval > 0 && SystemTime::now().duration_since(last_sync)?.as_secs() >= sync_interval {
             if let Err(e) = db_loop.sync().await {
                 eprintln!("Error syncing: {}", e);

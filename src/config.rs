@@ -10,6 +10,11 @@ pub struct Config {
     pub update_interval: u64,
     pub sync_interval: u64,
     pub five_minute_hours: u32,
+    pub hourly_days: u32,
+    pub daily_days: u32,
+    pub monthly_months: u32,
+    pub yearly_years: i32,
+    pub top_day_entries: u32,
     pub daemon_socket: Option<PathBuf>,
     pub hostname_override: Option<String>,
 }
@@ -19,6 +24,11 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
         update_interval: 30,
         sync_interval: 300,
         five_minute_hours: 48,
+        hourly_days: 4,
+        daily_days: 62,
+        monthly_months: 25,
+        yearly_years: -1,
+        top_day_entries: 20,
         ..Default::default()
     };
 
@@ -55,6 +65,21 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
             }
             "5MinuteHours" => {
                 if let Ok(v) = value.parse() { config.five_minute_hours = v; }
+            }
+            "HourlyDays" => {
+                if let Ok(v) = value.parse() { config.hourly_days = v; }
+            }
+            "DailyDays" => {
+                if let Ok(v) = value.parse() { config.daily_days = v; }
+            }
+            "MonthlyMonths" => {
+                if let Ok(v) = value.parse() { config.monthly_months = v; }
+            }
+            "YearlyYears" => {
+                if let Ok(v) = value.parse() { config.yearly_years = v; }
+            }
+            "TopDayEntries" => {
+                if let Ok(v) = value.parse() { config.top_day_entries = v; }
             }
             "DaemonSocket" => config.daemon_socket = Some(expand_tilde(value)),
             "Hostname" => config.hostname_override = Some(value.to_string()),
@@ -94,6 +119,11 @@ pub fn get_default_config(is_root: bool) -> Config {
         update_interval: 30,
         sync_interval: 300,
         five_minute_hours: 48,
+        hourly_days: 4,
+        daily_days: 62,
+        monthly_months: 25,
+        yearly_years: -1,
+        top_day_entries: 20,
         ..Default::default()
     };
 
