@@ -1,6 +1,6 @@
 # vnstat-rs
 
-A Rust port of [vnStat](https://github.com/vergoh/vnstat) using [Turso](https://github.com/tursodatabase/turso) for SQLite storage and remote synchronization.
+A Rust port of [vnStat](https://github.com/vergoh/vnstat) using [libsql](https://github.com/tursodatabase/libsql) for robust local storage and optional remote synchronization with Turso.
 
 Following the original vnStat architecture, this project provides two binaries:
 - `vnstat-rs`: The CLI client for querying statistics.
@@ -8,13 +8,15 @@ Following the original vnStat architecture, this project provides two binaries:
 
 ## Features
 
+- **Hybrid Persistence**: Maintains a local SQLite/libsql database for the local host's statistics while optionally aggregating data from multiple hosts via a remote Libsql/Turso server.
 - **Traffic Monitoring**: Reads network traffic statistics from `/proc/net/dev`.
 - **Delta Calculation**: Stores only the differences between updates, handling counter resets (e.g., after reboots).
-- **Turso Integration**: Uses Turso for robust local storage.
+- **Automated Failover**: The CLI automatically detects if `vnstatd-rs` is not running and falls back to direct database access.
+- **Unique Identification**: Uses both `machine-id` (from `/etc/machine-id`) and MAC addresses to uniquely identify hosts and interfaces in a distributed environment.
+- **Hardware Tracking**: Automatically discovers and stores MAC addresses for all monitored interfaces.
 - **Root/sudo is not necessary**: Automatically switches to user-local paths (`~/.config` and `~/.local`) if system paths are not accessible.
-- **Multi-host Support**: Identifies hosts using a unique `machine-id` (from `/etc/machine-id`) and hostname, allowing multiple instances to report to a centralized server.
-- **Remote Sync**: Supports syncing local statistics with a remote Turso database (handled by the daemon).
-- **Human-readable Output**: Displays statistics in KiB, MiB, GiB, etc.
+- **Multi-host Support**: Aggregate views of all reporting hosts using the `--host-all` flag.
+- **Human-readable Output**: Displays statistics in KiB, MiB, GiB, etc., with official vnStat-compatible tabular formatting.
 - **CLI Compatibility**: Command-line arguments designed to match the original `vnstat` and `vnstatd`.
 
 ## Installation
@@ -44,29 +46,32 @@ sudo cp target/release/vnstatd-rs /usr/local/bin/
 ### vnstat-rs (Client)
 
 ```bash
+# Show summary (current host)
+vnstat-rs
+
 # Show daily statistics
 vnstat-rs -d
 
-# Show hourly statistics
-vnstat-rs -h
+# Show monthly statistics (compliant with official vnStat format)
+vnstat-rs -m
+
+# Show statistics for all hosts in the remote database
+vnstat-rs --host-all
+
+# List all known hosts and their machine IDs
+vnstat-rs --host-list
+
+# Show daemon/host information (includes Machine ID and MAC)
+vnstat-rs --info
 
 # Select a specific interface
 vnstat-rs -i eth0
-
-# Use a specific configuration file
-vnstat-rs -c ~/.vnstat-rs.conf
 
 # Update the database (one-shot update)
 vnstat-rs -u
 
 # Initialize the database
 vnstat-rs --init
-
-# List available interfaces
-vnstat-rs --iflist
-
-# Show help
-vnstat-rs -?
 ```
 
 ### vnstatd-rs (Daemon)
@@ -80,9 +85,6 @@ vnstatd-rs --initdb
 
 # Use a specific configuration file
 vnstatd-rs -c ~/.vnstat-rs.conf
-
-# Synchronize internal counters (useful after reboot)
-vnstatd-rs --sync-counters
 ```
 
 ### User Space (Root-less)
@@ -102,15 +104,9 @@ By default, the application looks for a configuration file at:
 - Root: `/etc/vnstat-rs.conf`
 - User: `~/.config/vnstat-rs/vnstat-rs.conf`
 
-And a database at:
-- Root: `/var/lib/vnstat-rs/vnstat-rs.db`
-- User: `~/.local/share/vnstat-rs/vnstat-rs.db`
+### Remote Synchronization
 
-The daemon socket is located at:
-- Root: `/var/run/vnstat-rs.sock`
-- User: `~/.local/share/vnstat-rs/vnstat-rs.sock`
-
-Example config content:
+To centralize data from multiple hosts, use the `LibsqlUrl` and `LibsqlToken` settings:
 
 ```conf
 # location of the database directory
@@ -119,14 +115,16 @@ Example config content:
 # database file name
 # Database "vnstat-rs.db"
 
-# Remote Turso configuration (vnstat-rs specific)
-TursoUrl "libsql://your-db-name.turso.io"
-TursoToken "your-auth-token"
+# Remote Libsql/Turso configuration
+LibsqlUrl "libsql://your-db-name.turso.io"
+LibsqlToken "your-auth-token"
 
 # Intervals in seconds
 UpdateInterval 30
 SyncInterval 300
 ```
+
+*Note: `TursoUrl` and `TursoToken` are still supported as aliases.*
 
 ## Systemd Service
 
