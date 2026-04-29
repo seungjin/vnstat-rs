@@ -365,15 +365,7 @@ async fn main() -> Result<()> {
                                 }
                             }
                             OutputFormat::Table => {
-                                println!("{:<20} {:<15} {:<20} {:<15} {:<15}", "Host", "Interface", "Date", "RX", "TX");
-                                for entry in history {
-                                    let date_str = chrono::DateTime::from_timestamp(entry.date, 0)
-                                        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                                        .unwrap_or_else(|| entry.date.to_string());
-
-                                    println!("{:<20} {:<15} {:<20} {:<15} {:<15}", 
-                                        entry.hostname, entry.interface, date_str, format_bytes(entry.rx), format_bytes(entry.tx));
-                                }
+                                print_history_table(&requested_table, history);
                             }
                         }
                         return Ok(());
@@ -442,15 +434,7 @@ async fn main() -> Result<()> {
                 }
             }
             OutputFormat::Table => {
-                println!("{:<20} {:<15} {:<20} {:<15} {:<15}", "Host", "Interface", "Date", "RX", "TX");
-                for entry in history {
-                    let date_str = chrono::DateTime::from_timestamp(entry.date, 0)
-                        .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
-                        .unwrap_or_else(|| entry.date.to_string());
-
-                    println!("{:<20} {:<15} {:<20} {:<15} {:<15}", 
-                        entry.hostname, entry.interface, date_str, format_bytes(entry.rx), format_bytes(entry.tx));
-                }
+                print_history_table(table, history);
             }
         }
         return Ok(());
@@ -570,5 +554,157 @@ fn format_bytes_short(bytes: u64) -> String {
         format!("{:.2} KiB", bytes as f64 / KB as f64)
     } else {
         format!("{} B", bytes)
+    }
+}
+
+fn print_history_table(table: &str, history: Vec<vnstat_rs::HistoryEntry>) {
+    if history.is_empty() {
+        println!("No data available.");
+        return;
+    }
+
+    // Group by interface for better output if multiple are present
+    let mut by_interface: std::collections::HashMap<String, Vec<&vnstat_rs::HistoryEntry>> = std::collections::HashMap::new();
+    for entry in &history {
+        by_interface.entry(entry.interface.clone()).or_default().push(entry);
+    }
+
+    let mut interfaces: Vec<_> = by_interface.keys().cloned().collect();
+    interfaces.sort();
+
+    let now = chrono::Utc::now();
+    let now_ts = now.timestamp();
+
+    for iface in interfaces {
+        let entries = by_interface.get(&iface).unwrap();
+        let title = match table {
+            "fiveminute" => "five minute",
+            "hour" => "hourly",
+            "day" => "daily",
+            "month" => "monthly",
+            "year" => "yearly",
+            "top" => "top 10",
+            _ => table,
+        };
+
+        println!("\n {:<10} / {:<10}\n", iface, title);
+        
+        let label_header = match table {
+            "fiveminute" | "hour" => "      time  ",
+            "day" => "      day   ",
+            "month" => "     month  ",
+            "year" => "     year   ",
+            _ => "      date  ",
+        };
+
+        println!(" {:<12} {:>10} | {:>10} | {:>10} | {:>12}", 
+            label_header, "rx", "tx", "total", "avg. rate");
+        println!("     ------------------------+-------------+-------------+---------------");
+
+        for entry in entries {
+            let dt = chrono::DateTime::from_timestamp(entry.date, 0).unwrap();
+            let label = match table {
+                "fiveminute" | "hour" => dt.format("%Y-%m-%d %H:%M").to_string(),
+                "day" => dt.format("%Y-%m-%d").to_string(),
+                "month" => dt.format("%Y-%m").to_string(),
+                "year" => dt.format("%Y").to_string(),
+                _ => dt.format("%Y-%m-%d").to_string(),
+            };
+
+            let total = entry.rx + entry.tx;
+            
+            // Calculate average rate
+            let seconds = match table {
+                "fiveminute" => 300,
+                "hour" => 3600,
+                "day" => 86400,
+                "month" => {
+                    use chrono::Datelike;
+                    let year = dt.year();
+                    let month = dt.month();
+                    let days = match month {
+                        1|3|5|7|8|10|12 => 31,
+                        4|6|9|11 => 30,
+                        2 => if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) { 29 } else { 28 },
+                        _ => 30,
+                    };
+                    days * 86400
+                },
+                "year" => {
+                    use chrono::Datelike;
+                    if (dt.year() % 4 == 0 && dt.year() % 100 != 0) || (dt.year() % 400 == 0) { 366 * 86400 } else { 365 * 86400 }
+                },
+                _ => 86400,
+            };
+
+            let rate_bits = (total * 8) as f64 / seconds as f64;
+            let rate_str = format_rate(rate_bits);
+
+            println!("       {:<10} {:>10} | {:>10} | {:>10} | {:>12}", 
+                label, format_bytes_short(entry.rx), format_bytes_short(entry.tx), format_bytes_short(total), rate_str);
+        }
+
+        println!("     ------------------------+-------------+-------------+---------------");
+
+        // Estimation for current period
+        if let Some(latest) = entries.first() {
+            use chrono::Datelike;
+            let dt = chrono::DateTime::from_timestamp(latest.date, 0).unwrap();
+            let is_current = match table {
+                "day" => dt.date_naive() == now.date_naive(),
+                "month" => dt.year() == now.year() && dt.month() == now.month(),
+                "year" => dt.year() == now.year(),
+                _ => false,
+            };
+
+            if is_current {
+                let (secs_passed, total_secs) = match table {
+                    "day" => {
+                        let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
+                        let start_ts = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(today_start, chrono::Utc).timestamp();
+                        ((now_ts - start_ts).max(1) as f64, 86400.0)
+                    },
+                    "month" => {
+                        let month_start = now.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+                        let start_ts = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(month_start, chrono::Utc).timestamp();
+                        let days = match now.month() {
+                            1|3|5|7|8|10|12 => 31,
+                            4|6|9|11 => 30,
+                            2 => if (now.year() % 4 == 0 && now.year() % 100 != 0) || (now.year() % 400 == 0) { 29 } else { 28 },
+                            _ => 30,
+                        };
+                        ((now_ts - start_ts).max(1) as f64, (days * 86400) as f64)
+                    },
+                    "year" => {
+                        let year_start = now.date_naive().with_month(1).unwrap().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+                        let start_ts = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(year_start, chrono::Utc).timestamp();
+                        let days = if (now.year() % 4 == 0 && now.year() % 100 != 0) || (now.year() % 400 == 0) { 366 } else { 365 };
+                        ((now_ts - start_ts).max(1) as f64, (days * 86400) as f64)
+                    },
+                    _ => (1.0, 1.0),
+                };
+
+                if total_secs > 1.0 {
+                    let est_rx = (latest.rx as f64 * (total_secs / secs_passed)) as u64;
+                    let est_tx = (latest.tx as f64 * (total_secs / secs_passed)) as u64;
+                    let est_total = est_rx + est_tx;
+
+                    println!("     {:<12} {:>10} | {:>10} | {:>10} |", 
+                        "estimated", format_bytes_short(est_rx), format_bytes_short(est_tx), format_bytes_short(est_total));
+                }
+            }
+        }
+    }
+}
+
+fn format_rate(bits_per_sec: f64) -> String {
+    if bits_per_sec >= 1_000_000_000.0 {
+        format!("{:.2} Gbit/s", bits_per_sec / 1_000_000_000.0)
+    } else if bits_per_sec >= 1_000_000.0 {
+        format!("{:.2} Mbit/s", bits_per_sec / 1_000_000.0)
+    } else if bits_per_sec >= 1_000.0 {
+        format!("{:.2} kbit/s", bits_per_sec / 1_000.0)
+    } else {
+        format!("{:.2} bit/s", bits_per_sec)
     }
 }

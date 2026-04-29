@@ -121,36 +121,61 @@ impl Db {
                 if version == 3 {
                     println!("Applying v4 migration: Converting IDs to TEXT for multi-host sync support...");
                     
+                    self.conn.execute("PRAGMA foreign_keys = OFF", ()).await?;
+
                     let tables = vec!["host", "interface", "fiveminute", "hour", "day", "month", "year", "top"];
+                    
                     for table in &tables {
-                        self.execute_batch(&format!("DROP TABLE IF EXISTS {}_old", table)).await?;
-                        let _ = self.conn.execute(&format!("ALTER TABLE {} RENAME TO {}_old", table, table), ()).await;
+                        let _ = self.conn.execute(&format!("DROP TABLE IF EXISTS {}_old", table), ()).await;
                     }
+
+                    for table in &tables {
+                        let rename_res = self.conn.execute(&format!("ALTER TABLE {} RENAME TO {}_old", table, table), ()).await;
+                        if let Err(e) = rename_res {
+                            if !e.to_string().contains("no such table") {
+                                println!("Warning: Could not rename {}: {}", table, e);
+                            }
+                        }
+                    }
+
+                    // Explicitly drop indices that might conflict
+                    let _ = self.conn.execute("DROP INDEX IF EXISTS sqlite_autoindex_host_1", ()).await;
+                    let _ = self.conn.execute("DROP INDEX IF EXISTS sqlite_autoindex_interface_1", ()).await;
 
                     self.execute_batch(SCHEMA_SQL).await?;
 
-                    self.execute_batch("INSERT INTO host (id, machine_id, hostname) SELECT machine_id, machine_id, hostname FROM host_old").await?;
+                    let mut host_old_exists = false;
+                    if let Ok(mut rows) = self.conn.query("SELECT name FROM sqlite_master WHERE type='table' AND name='host_old'", ()).await {
+                        if rows.next().await?.is_some() {
+                            host_old_exists = true;
+                        }
+                    }
 
-                    self.execute_batch("
-                        INSERT INTO interface (id, host_id, name, alias, active, created, updated, rxcounter, txcounter, rxtotal, txtotal)
-                        SELECT h.machine_id || ':' || i.name, h.machine_id, i.name, i.alias, i.active, i.created, i.updated, i.rxcounter, i.txcounter, i.rxtotal, i.txtotal
-                        FROM interface_old i JOIN host_old h ON i.host_id = h.id
-                    ").await?;
+                    if host_old_exists {
+                        self.execute_batch("INSERT INTO host (id, machine_id, hostname) SELECT machine_id, machine_id, hostname FROM host_old").await?;
 
-                    for table in &vec!["fiveminute", "hour", "day", "month", "year", "top"] {
-                        self.execute_batch(&format!("
-                            INSERT INTO {} (interface, date, rx, tx)
-                            SELECT h.machine_id || ':' || i.name, t.date, t.rx, t.tx
-                            FROM {}_old t
-                            JOIN interface_old i ON t.interface = i.id
-                            JOIN host_old h ON i.host_id = h.id
-                        ", table, table)).await?;
+                        self.execute_batch("
+                            INSERT INTO interface (id, host_id, name, alias, active, created, updated, rxcounter, txcounter, rxtotal, txtotal)
+                            SELECT h.machine_id || ':' || i.name, h.machine_id, i.name, i.alias, i.active, i.created, i.updated, i.rxcounter, i.txcounter, i.rxtotal, i.txtotal
+                            FROM interface_old i JOIN host_old h ON i.host_id = h.id
+                        ").await?;
+
+                        for table in &vec!["fiveminute", "hour", "day", "month", "year", "top"] {
+                            let _ = self.execute_batch(&format!("
+                                INSERT INTO {} (interface, date, rx, tx)
+                                SELECT h.machine_id || ':' || i.name, t.date, t.rx, t.tx
+                                FROM {}_old t
+                                JOIN interface_old i ON t.interface = i.id
+                                JOIN host_old h ON i.host_id = h.id
+                            ", table, table)).await;
+                        }
                     }
 
                     for table in &tables {
-                        let _ = self.conn.execute(&format!("DROP TABLE {}_old", table), ()).await;
+                        let _ = self.conn.execute(&format!("DROP TABLE IF EXISTS {}_old", table), ()).await;
                     }
                     
+                    self.conn.execute("PRAGMA foreign_keys = ON", ()).await?;
                     version = 4;
                 }
 
@@ -225,9 +250,35 @@ impl Db {
         Ok(())
     }
 
+    pub async fn add_history_entry(&self, id: &str, rx_delta: u64, tx_delta: u64) -> Result<()> {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let dt = chrono::DateTime::from_timestamp(now, 0).unwrap();
+        let naive = dt.naive_utc();
+
+        let five_min = (now / 300) * 300;
+        self.add_traffic(id, "fiveminute", five_min, rx_delta, tx_delta).await?;
+
+        let hour = (now / 3600) * 3600;
+        self.add_traffic(id, "hour", hour, rx_delta, tx_delta).await?;
+
+        let day_dt = naive.date().and_hms_opt(0, 0, 0).unwrap();
+        let day = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(day_dt, chrono::Utc).timestamp();
+        self.add_traffic(id, "day", day, rx_delta, tx_delta).await?;
+
+        let month_dt = naive.date().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let month = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(month_dt, chrono::Utc).timestamp();
+        self.add_traffic(id, "month", month, rx_delta, tx_delta).await?;
+
+        let year_dt = naive.date().with_day(1).unwrap().with_month(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let year = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(year_dt, chrono::Utc).timestamp();
+        self.add_traffic(id, "year", year, rx_delta, tx_delta).await?;
+
+        self.add_traffic(id, "top", day, rx_delta, tx_delta).await?;
+        Ok(())
+    }
+
     pub async fn update_stats(&self, filter_iface: Option<&str>) -> Result<()> {
         let stats = parse_net_dev()?;
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
 
         for stat in stats {
             if let Some(f) = filter_iface {
@@ -249,32 +300,13 @@ impl Db {
 
                 if rx_delta > 0 || tx_delta > 0 {
                     self.update_interface_counters(&id, stat.rx_bytes, stat.tx_bytes, rx_delta, tx_delta).await?;
-                    let dt = chrono::DateTime::from_timestamp(now, 0).unwrap();
-                    let naive = dt.naive_utc();
-
-                    let five_min = (now / 300) * 300;
-                    self.add_traffic(&id, "fiveminute", five_min, rx_delta, tx_delta).await?;
-
-                    let hour = (now / 3600) * 3600;
-                    self.add_traffic(&id, "hour", hour, rx_delta, tx_delta).await?;
-
-                    let day_dt = naive.date().and_hms_opt(0, 0, 0).unwrap();
-                    let day = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(day_dt, chrono::Utc).timestamp();
-                    self.add_traffic(&id, "day", day, rx_delta, tx_delta).await?;
-
-                    let month_dt = naive.date().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-                    let month = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(month_dt, chrono::Utc).timestamp();
-                    self.add_traffic(&id, "month", month, rx_delta, tx_delta).await?;
-
-                    let year_dt = naive.date().with_day(1).unwrap().with_month(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-                    let year = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(year_dt, chrono::Utc).timestamp();
-                    self.add_traffic(&id, "year", year, rx_delta, tx_delta).await?;
-
-                    self.add_traffic(&id, "top", day, rx_delta, tx_delta).await?;
+                    self.add_history_entry(&id, rx_delta, tx_delta).await?;
                     println!("Updated {}: +rx={} +tx={}", stat.name, format_bytes(rx_delta), format_bytes(tx_delta));
                 }
             } else {
-                self.create_interface(&stat.name, stat.rx_bytes, stat.tx_bytes).await?;
+                let id = self.create_interface(&stat.name, stat.rx_bytes, stat.tx_bytes).await?;
+                // Add initial 0 delta to ensure history record is created for today
+                self.add_history_entry(&id, 0, 0).await?;
                 println!("New interface found: {} (host: {})", stat.name, self.hostname);
             }
         }
