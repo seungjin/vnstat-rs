@@ -26,11 +26,13 @@ impl Db {
     pub async fn create_interface(&self, name: &str, rx: u64, tx: u64, mac: Option<String>) -> Result<String> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         let id = format!("{}:{}", self.host_id, name);
-        let sql = "INSERT INTO interface (id, host_id, name, mac_address, created, updated, rxcounter, txcounter) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+        let sql = "INSERT OR IGNORE INTO interface (id, host_id, name, mac_address, created, updated, rxcounter, txcounter) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
         
         self.local_conn.execute(sql, (id.clone(), self.host_id.clone(), name.to_string(), mac.clone(), now, now, rx as i64, tx as i64)).await?;
         if let Some(ref remote) = self.remote_conn {
-            let _ = remote.execute(sql, (id.clone(), self.host_id.clone(), name.to_string(), mac, now, now, rx as i64, tx as i64)).await;
+            if let Err(e) = remote.execute(sql, (id.clone(), self.host_id.clone(), name.to_string(), mac, now, now, rx as i64, tx as i64)).await {
+                eprintln!("Warning: Failed to create interface on remote: {}", e);
+            }
         }
 
         Ok(id)
@@ -42,7 +44,9 @@ impl Db {
         
         self.local_conn.execute(sql, (now, rx as i64, tx as i64, rx_delta as i64, tx_delta as i64, id.to_string())).await?;
         if let Some(ref remote) = self.remote_conn {
-            let _ = remote.execute(sql, (now, rx as i64, tx as i64, rx_delta as i64, tx_delta as i64, id.to_string())).await;
+            if let Err(e) = remote.execute(sql, (now, rx as i64, tx as i64, rx_delta as i64, tx_delta as i64, id.to_string())).await {
+                eprintln!("Warning: Failed to update interface counters on remote: {}", e);
+            }
         }
         Ok(())
     }
@@ -51,7 +55,9 @@ impl Db {
         let sql = "UPDATE interface SET mac_address = ? WHERE id = ?";
         self.local_conn.execute(sql, (mac.to_string(), id.to_string())).await?;
         if let Some(ref remote) = self.remote_conn {
-            let _ = remote.execute(sql, (mac.to_string(), id.to_string())).await;
+            if let Err(e) = remote.execute(sql, (mac.to_string(), id.to_string())).await {
+                eprintln!("Warning: Failed to update interface MAC on remote: {}", e);
+            }
         }
         Ok(())
     }
@@ -61,7 +67,9 @@ impl Db {
         let active_val = if active { 1 } else { 0 };
         self.local_conn.execute(sql, (active_val, id.to_string())).await?;
         if let Some(ref remote) = self.remote_conn {
-            let _ = remote.execute(sql, (active_val, id.to_string())).await;
+            if let Err(e) = remote.execute(sql, (active_val, id.to_string())).await {
+                eprintln!("Warning: Failed to set interface active status on remote: {}", e);
+            }
         }
         Ok(())
     }

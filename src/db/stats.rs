@@ -15,7 +15,9 @@ impl Db {
             );
         self.local_conn.execute(&sql, (interface_id.to_string(), date, rx as i64, tx as i64)).await?;
         if let Some(ref remote) = self.remote_conn {
-            let _ = remote.execute(&sql, (interface_id.to_string(), date, rx as i64, tx as i64)).await;
+            if let Err(e) = remote.execute(&sql, (interface_id.to_string(), date, rx as i64, tx as i64)).await {
+                eprintln!("Warning: Failed to add traffic to remote (table {}): {}", table, e);
+            }
         }
         Ok(())
     }
@@ -55,7 +57,9 @@ impl Db {
         let sql5 = "DELETE FROM fiveminute WHERE date < ?";
         self.local_conn.execute(sql5, [five_min_cutoff]).await?;
         if let Some(ref remote) = self.remote_conn {
-            let _ = remote.execute(sql5, [five_min_cutoff]).await;
+            if let Err(e) = remote.execute(sql5, [five_min_cutoff]).await {
+                eprintln!("Warning: Failed to prune 5-minute data on remote: {}", e);
+            }
         }
 
         // Hourly data
@@ -63,7 +67,9 @@ impl Db {
         let sqlh = "DELETE FROM hour WHERE date < ?";
         self.local_conn.execute(sqlh, [hourly_cutoff]).await?;
         if let Some(ref remote) = self.remote_conn {
-            let _ = remote.execute(sqlh, [hourly_cutoff]).await;
+            if let Err(e) = remote.execute(sqlh, [hourly_cutoff]).await {
+                eprintln!("Warning: Failed to prune hourly data on remote: {}", e);
+            }
         }
 
         // Daily data
@@ -71,7 +77,9 @@ impl Db {
         let sqld = "DELETE FROM day WHERE date < ?";
         self.local_conn.execute(sqld, [daily_cutoff]).await?;
         if let Some(ref remote) = self.remote_conn {
-            let _ = remote.execute(sqld, [daily_cutoff]).await;
+            if let Err(e) = remote.execute(sqld, [daily_cutoff]).await {
+                eprintln!("Warning: Failed to prune daily data on remote: {}", e);
+            }
         }
 
         // Monthly data (approximate 30 days per month for simplicity of cutoff)
@@ -79,7 +87,9 @@ impl Db {
         let sqlm = "DELETE FROM month WHERE date < ?";
         self.local_conn.execute(sqlm, [monthly_cutoff]).await?;
         if let Some(ref remote) = self.remote_conn {
-            let _ = remote.execute(sqlm, [monthly_cutoff]).await;
+            if let Err(e) = remote.execute(sqlm, [monthly_cutoff]).await {
+                eprintln!("Warning: Failed to prune monthly data on remote: {}", e);
+            }
         }
 
         // Yearly data
@@ -88,7 +98,9 @@ impl Db {
             let sqly = "DELETE FROM year WHERE date < ?";
             self.local_conn.execute(sqly, [yearly_cutoff]).await?;
             if let Some(ref remote) = self.remote_conn {
-                let _ = remote.execute(sqly, [yearly_cutoff]).await;
+                if let Err(e) = remote.execute(sqly, [yearly_cutoff]).await {
+                    eprintln!("Warning: Failed to prune yearly data on remote: {}", e);
+                }
             }
         }
 
@@ -105,7 +117,9 @@ impl Db {
                 )";
             self.local_conn.execute(delete_sql, (iface_id.clone(), iface_id.clone(), config.top_day_entries as i64)).await?;
             if let Some(ref remote) = self.remote_conn {
-                let _ = remote.execute(delete_sql, (iface_id.clone(), iface_id.clone(), config.top_day_entries as i64)).await;
+                if let Err(e) = remote.execute(delete_sql, (iface_id.clone(), iface_id.clone(), config.top_day_entries as i64)).await {
+                    eprintln!("Warning: Failed to prune top data on remote for interface {}: {}", iface_id, e);
+                }
             }
         }
 
@@ -146,6 +160,7 @@ impl Db {
                 };
 
                 if rx_delta > 0 || tx_delta > 0 {
+                    println!("Updating interface {} (+{} RX, +{} TX)...", stat.name, rx_delta, tx_delta);
                     self.update_interface_counters(&id, stat.rx_bytes, stat.tx_bytes, rx_delta, tx_delta).await?;
                     self.add_history_entry(&id, rx_delta, tx_delta).await?;
                 }
@@ -153,7 +168,7 @@ impl Db {
                 let id = self.create_interface(&stat.name, stat.rx_bytes, stat.tx_bytes, stat.mac_address).await?;
                 seen_ids.insert(id.clone());
                 self.add_history_entry(&id, 0, 0).await?;
-                println!("New interface found: {} (host: {})", stat.name, self.hostname);
+                println!("New interface found and registered: {} (host: {})", stat.name, self.hostname);
             }
         }
 
