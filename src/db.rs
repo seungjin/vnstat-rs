@@ -25,7 +25,7 @@ const CURRENT_VERSION: i32 = 4;
 impl Db {
     pub async fn open(path: PathBuf, url: Option<String>, token: Option<String>) -> Result<Self> {
         let (db_type, conn) = if let (Some(url), Some(token)) = (url, token) {
-            println!("Connecting directly to remote database at {}...", url);
+            println!("Connecting to remote database at {}...", url);
             let db = turso::sync::Builder::new_remote(":memory:")
                 .with_remote_url(url)
                 .with_auth_token(token)
@@ -57,7 +57,6 @@ impl Db {
     }
 
     pub async fn sync(&self) -> Result<()> {
-        // Direct remote doesn't need manual sync/push
         Ok(())
     }
 
@@ -85,6 +84,14 @@ impl Db {
     }
 
     pub async fn init_schema(&self) -> Result<()> {
+        // Ensure base tables exist before querying version
+        for statement in SCHEMA_SQL.split(';') {
+            let trimmed = statement.trim();
+            if !trimmed.is_empty() {
+                let _ = self.conn.execute(trimmed, ()).await;
+            }
+        }
+
         let mut rows = self.conn.query("SELECT value FROM info WHERE name = 'version'", ()).await?;
         let mut version: i32 = if let Some(row) = rows.next().await? {
             row.get::<String>(0)?.parse().unwrap_or(1)
@@ -94,84 +101,93 @@ impl Db {
 
         if version < CURRENT_VERSION {
             if version == 0 {
-                self.execute_batch(SCHEMA_SQL).await?;
-                self.conn.execute("INSERT OR IGNORE INTO info (name, value) VALUES ('version', '4')", ()).await?;
+                let _ = self.conn.execute("INSERT OR IGNORE INTO info (name, value) VALUES ('version', '4')", ()).await;
             } else {
                 println!("Migrating database from version {} to {}...", version, CURRENT_VERSION);
                 
-                if version == 2 {
-                    version = 3;
-                }
+                if version < 4 {
+                    let _ = self.conn.execute("PRAGMA foreign_keys = OFF", ()).await;
 
-                if version == 3 {
-                    println!("Applying v4 migration: Converting IDs to TEXT for multi-host sync support...");
-                    
-                    self.conn.execute("PRAGMA foreign_keys = OFF", ()).await?;
-
-                    let tables = vec!["host", "interface", "fiveminute", "hour", "day", "month", "year", "top"];
-                    
-                    for table in &tables {
-                        let _ = self.conn.execute(&format!("DROP TABLE IF EXISTS {}_old", table), ()).await;
-                    }
-
-                    for table in &tables {
-                        let rename_res = self.conn.execute(&format!("ALTER TABLE {} RENAME TO {}_old", table, table), ()).await;
-                        if let Err(e) = rename_res {
-                            if !e.to_string().contains("no such table") {
-                                println!("Warning: Could not rename {}: {}", table, e);
+                    // Check if migration is already effectively done
+                    let mut needs_migration = true;
+                    if let Ok(mut r) = self.conn.query("PRAGMA table_info(host)", ()).await {
+                        while let Some(row) = r.next().await? {
+                            let name: String = row.get(1)?;
+                            let type_name: String = row.get(2)?;
+                            if name == "id" && type_name == "TEXT" {
+                                needs_migration = false;
+                                break;
                             }
                         }
                     }
 
-                    // Explicitly drop indices that might conflict
-                    let _ = self.conn.execute("DROP INDEX IF EXISTS sqlite_autoindex_host_1", ()).await;
-                    let _ = self.conn.execute("DROP INDEX IF EXISTS sqlite_autoindex_interface_1", ()).await;
-
-                    self.execute_batch(SCHEMA_SQL).await?;
-
-                    let mut host_old_exists = false;
-                    if let Ok(mut rows) = self.conn.query("SELECT name FROM sqlite_master WHERE type='table' AND name='host_old'", ()).await {
-                        if rows.next().await?.is_some() {
-                            host_old_exists = true;
+                    if needs_migration {
+                        println!("Applying v4 migration: Converting IDs to TEXT for multi-host support...");
+                        let tables = vec!["host", "interface", "fiveminute", "hour", "day", "month", "year", "top"];
+                        
+                        for table in &tables {
+                            let _ = self.conn.execute(&format!("DROP TABLE IF EXISTS {}_old", table), ()).await;
+                            let _ = self.conn.execute(&format!("ALTER TABLE {} RENAME TO {}_old", table, table), ()).await;
                         }
-                    }
 
-                    if host_old_exists {
-                        self.execute_batch("INSERT INTO host (id, machine_id, hostname) SELECT machine_id, machine_id, hostname FROM host_old").await?;
-
-                        self.execute_batch("
-                            INSERT INTO interface (id, host_id, name, alias, active, created, updated, rxcounter, txcounter, rxtotal, txtotal)
-                            SELECT h.machine_id || ':' || i.name, h.machine_id, i.name, i.alias, i.active, i.created, i.updated, i.rxcounter, i.txcounter, i.rxtotal, i.txtotal
-                            FROM interface_old i JOIN host_old h ON i.host_id = h.id
-                        ").await?;
-
-                        for table in &vec!["fiveminute", "hour", "day", "month", "year", "top"] {
-                            let _ = self.execute_batch(&format!("
-                                INSERT INTO {} (interface, date, rx, tx)
-                                SELECT h.machine_id || ':' || i.name, t.date, t.rx, t.tx
-                                FROM {}_old t
-                                JOIN interface_old i ON t.interface = i.id
-                                JOIN host_old h ON i.host_id = h.id
-                            ", table, table)).await;
+                        // Recreate fresh schema
+                        for statement in SCHEMA_SQL.split(';') {
+                            let trimmed = statement.trim();
+                            if !trimmed.is_empty() {
+                                let _ = self.conn.execute(trimmed, ()).await;
+                            }
                         }
-                    }
 
-                    for table in &tables {
-                        let _ = self.conn.execute(&format!("DROP TABLE IF EXISTS {}_old", table), ()).await;
+                        let host_old_exists = if let Ok(mut r) = self.conn.query("SELECT name FROM sqlite_master WHERE type='table' AND name='host_old'", ()).await {
+                            r.next().await?.is_some()
+                        } else { false };
+
+                        if host_old_exists {
+                            let _ = self.execute_batch("INSERT OR IGNORE INTO host (id, machine_id, hostname) SELECT machine_id, machine_id, hostname FROM host_old").await;
+                            let _ = self.execute_batch("
+                                INSERT OR IGNORE INTO interface (id, host_id, name, alias, active, created, updated, rxcounter, txcounter, rxtotal, txtotal)
+                                SELECT h.machine_id || ':' || i.name, h.machine_id, i.name, i.alias, i.active, i.created, i.updated, i.rxcounter, i.txcounter, i.rxtotal, i.txtotal
+                                FROM interface_old i JOIN host_old h ON i.host_id = h.id
+                            ").await;
+
+                            for table in &vec!["fiveminute", "hour", "day", "month", "year", "top"] {
+                                let _ = self.execute_batch(&format!("
+                                    INSERT OR IGNORE INTO {} (interface, date, rx, tx)
+                                    SELECT h.machine_id || ':' || i.name, t.date, t.rx, t.tx
+                                    FROM {}_old t
+                                    JOIN interface_old i ON t.interface = i.id
+                                    JOIN host_old h ON i.host_id = h.id
+                                ", table, table)).await;
+                            }
+                        }
+                        
+                        for table in &tables {
+                            let _ = self.conn.execute(&format!("DROP TABLE IF EXISTS {}_old", table), ()).await;
+                        }
+                    } else {
+                        // Already migrated, just ensure schema is present
+                        for statement in SCHEMA_SQL.split(';') {
+                            let trimmed = statement.trim();
+                            if !trimmed.is_empty() {
+                                let _ = self.conn.execute(trimmed, ()).await;
+                            }
+                        }
                     }
                     
-                    self.conn.execute("PRAGMA foreign_keys = ON", ()).await?;
+                    let _ = self.conn.execute("PRAGMA foreign_keys = ON", ()).await;
                     version = 4;
                 }
 
-                self.conn.execute(
-                    "UPDATE info SET value = ? WHERE name = 'version'",
-                    (version.to_string(),),
-                ).await?;
+                let _ = self.conn.execute("UPDATE info SET value = ? WHERE name = 'version'", (version.to_string(),)).await;
                 println!("Migration to version {} complete.", version);
             }
         } else {
-            self.execute_batch(SCHEMA_SQL).await?;
+            for statement in SCHEMA_SQL.split(';') {
+                let trimmed = statement.trim();
+                if !trimmed.is_empty() {
+                    let _ = self.conn.execute(trimmed, ()).await;
+                }
+            }
         }
 
         Ok(())
