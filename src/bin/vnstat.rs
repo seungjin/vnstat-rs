@@ -4,7 +4,7 @@ use clap::{Parser};
 use std::path::{PathBuf};
 use tokio::net::UnixStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use vnstat_rs::{Db, load_config, parse_net_dev, format_bytes, IpcRequest, IpcResponse};
+use vnstat_rs::{Db, parse_net_dev, format_bytes, IpcRequest, IpcResponse};
 
 async fn request_daemon(socket_path: &PathBuf, req: IpcRequest) -> Result<IpcResponse> {
     let mut stream = UnixStream::connect(socket_path).await?;
@@ -176,7 +176,7 @@ struct Cli {
     years: Option<Option<usize>>,
 
     /// Show top 10 days
-    #[arg(short, long, num_args = 0..=1)]
+    #[arg(short = 'T', long, num_args = 0..=1)]
     top: Option<Option<usize>>,
 
     /// Set list begin date
@@ -232,8 +232,8 @@ struct Cli {
     dbdir: Option<PathBuf>,
 
     /// Path to config file
-    #[arg(long, value_name = "FILE", default_value = "/etc/vnstat-rs.conf")]
-    config: PathBuf,
+    #[arg(short = 'c', long, value_name = "FILE")]
+    config: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -256,7 +256,45 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let file_config = load_config(&cli.config);
+    let is_root = unsafe { libc::getuid() == 0 };
+    let etc_config = PathBuf::from("/etc/vnstat-rs.conf");
+    let home = std::env::var("HOME").unwrap_or_default();
+    let user_config = PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
+
+    let file_config = if let Some(ref path) = cli.config {
+        match vnstat_rs::load_config(path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Error loading config {}: {}", path.display(), e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        match vnstat_rs::load_config(&etc_config) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                println!("Permission denied reading {}, trying {}...", etc_config.display(), user_config.display());
+                match vnstat_rs::load_config(&user_config) {
+                    Ok(c) => c,
+                    Err(ue) => {
+                        eprintln!("Could not read {} (permission denied or not exist) and {} ({}).", etc_config.display(), user_config.display(), ue);
+                        vnstat_rs::get_default_config(is_root)
+                    }
+                }
+            }
+            Err(_) => {
+                // Not found or other error, try user config silently if not root
+                if !is_root {
+                    match vnstat_rs::load_config(&user_config) {
+                        Ok(c) => c,
+                        Err(_) => vnstat_rs::get_default_config(is_root)
+                    }
+                } else {
+                    vnstat_rs::get_default_config(is_root)
+                }
+            }
+        }
+    };
     
     // Determine output format
     enum OutputFormat { Table, Json, Xml, Oneline }

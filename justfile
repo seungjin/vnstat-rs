@@ -33,6 +33,10 @@ install: release
     sudo cp target/release/vnstat-rs /usr/local/bin/
     sudo cp target/release/vnstatd-rs /usr/local/bin/
 
+# Install the binaries to ~/.cargo/bin
+install-user:
+    cargo install --path .
+
 # Setup systemd service and data directory
 setup-service:
     sudo useradd -r -s /sbin/nologin vnstat || true

@@ -2512,6 +2512,7 @@ dependencies = [
  "daemonize",
  "futures",
  "hostname",
+ "libc",
  "openssl",
  "serde",
  "serde_json",
