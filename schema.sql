@@ -1,10 +1,9 @@
 -- vnStat-rs Database Schema
 
--- Info table for metadata
-CREATE TABLE IF NOT EXISTS info (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT UNIQUE NOT NULL,
-    value TEXT NOT NULL
+-- Schema version tracking
+CREATE TABLE IF NOT EXISTS database_schema (
+    version INTEGER PRIMARY KEY,
+    applied_at INTEGER NOT NULL
 );
 
 -- Host table
@@ -14,7 +13,7 @@ CREATE TABLE IF NOT EXISTS host (
     hostname     TEXT NOT NULL
 );
 
--- Interface table (normalized with host_id)
+-- Interface table
 CREATE TABLE IF NOT EXISTS interface (
     id           TEXT PRIMARY KEY,
     host_id      TEXT NOT NULL REFERENCES host(id) ON DELETE CASCADE,
@@ -83,4 +82,11 @@ CREATE TABLE IF NOT EXISTS top (
     rx           INTEGER NOT NULL,
     tx           INTEGER NOT NULL,
     CONSTRAINT u UNIQUE (interface, date)
+);
+
+-- Backwards compatibility or metadata
+CREATE TABLE IF NOT EXISTS schema_info (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    value TEXT NOT NULL
 );
