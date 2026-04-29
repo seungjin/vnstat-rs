@@ -1,6 +1,6 @@
 # vnstat-rs
 
-A Rust port of [vnStat](https://github.com/vergoh/vnstat) using [libsql](https://github.com/tursodatabase/libsql) for robust local storage and optional remote synchronization with Turso.
+A Rust ~~port of [vnStat](https://github.com/vergoh/vnstat)~~ written network monitoring tool using [libsql](https://github.com/tursodatabase/libsql) for robust local storage and optional remote synchronization with Turso.
 
 Following the original vnStat architecture, this project provides two binaries:
 - `vnstat-rs`: The CLI client for querying statistics.
