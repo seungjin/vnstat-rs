@@ -51,43 +51,44 @@ impl Db {
 
     pub async fn prune_stats(&self, config: &crate::config::Config) -> Result<()> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let host_id = self.host_id.clone();
 
         // 5-minute data
         let five_min_cutoff = now - (config.five_minute_hours as i64 * 3600);
-        let sql5 = "DELETE FROM fiveminute WHERE date < ?";
-        self.local_conn.execute(sql5, [five_min_cutoff]).await?;
+        let sql5 = "DELETE FROM fiveminute WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
+        self.local_conn.execute(sql5, (five_min_cutoff, host_id.clone())).await?;
         if let Some(ref remote) = self.remote_conn {
-            if let Err(e) = remote.execute(sql5, [five_min_cutoff]).await {
+            if let Err(e) = remote.execute(sql5, (five_min_cutoff, host_id.clone())).await {
                 eprintln!("Warning: Failed to prune 5-minute data on remote: {}", e);
             }
         }
 
         // Hourly data
         let hourly_cutoff = now - (config.hourly_days as i64 * 86400);
-        let sqlh = "DELETE FROM hour WHERE date < ?";
-        self.local_conn.execute(sqlh, [hourly_cutoff]).await?;
+        let sqlh = "DELETE FROM hour WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
+        self.local_conn.execute(sqlh, (hourly_cutoff, host_id.clone())).await?;
         if let Some(ref remote) = self.remote_conn {
-            if let Err(e) = remote.execute(sqlh, [hourly_cutoff]).await {
+            if let Err(e) = remote.execute(sqlh, (hourly_cutoff, host_id.clone())).await {
                 eprintln!("Warning: Failed to prune hourly data on remote: {}", e);
             }
         }
 
         // Daily data
         let daily_cutoff = now - (config.daily_days as i64 * 86400);
-        let sqld = "DELETE FROM day WHERE date < ?";
-        self.local_conn.execute(sqld, [daily_cutoff]).await?;
+        let sqld = "DELETE FROM day WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
+        self.local_conn.execute(sqld, (daily_cutoff, host_id.clone())).await?;
         if let Some(ref remote) = self.remote_conn {
-            if let Err(e) = remote.execute(sqld, [daily_cutoff]).await {
+            if let Err(e) = remote.execute(sqld, (daily_cutoff, host_id.clone())).await {
                 eprintln!("Warning: Failed to prune daily data on remote: {}", e);
             }
         }
 
         // Monthly data (approximate 30 days per month for simplicity of cutoff)
         let monthly_cutoff = now - (config.monthly_months as i64 * 30 * 86400);
-        let sqlm = "DELETE FROM month WHERE date < ?";
-        self.local_conn.execute(sqlm, [monthly_cutoff]).await?;
+        let sqlm = "DELETE FROM month WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
+        self.local_conn.execute(sqlm, (monthly_cutoff, host_id.clone())).await?;
         if let Some(ref remote) = self.remote_conn {
-            if let Err(e) = remote.execute(sqlm, [monthly_cutoff]).await {
+            if let Err(e) = remote.execute(sqlm, (monthly_cutoff, host_id.clone())).await {
                 eprintln!("Warning: Failed to prune monthly data on remote: {}", e);
             }
         }
@@ -95,17 +96,17 @@ impl Db {
         // Yearly data
         if config.yearly_years >= 0 {
             let yearly_cutoff = now - (config.yearly_years as i64 * 365 * 86400);
-            let sqly = "DELETE FROM year WHERE date < ?";
-            self.local_conn.execute(sqly, [yearly_cutoff]).await?;
+            let sqly = "DELETE FROM year WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
+            self.local_conn.execute(sqly, (yearly_cutoff, host_id.clone())).await?;
             if let Some(ref remote) = self.remote_conn {
-                if let Err(e) = remote.execute(sqly, [yearly_cutoff]).await {
+                if let Err(e) = remote.execute(sqly, (yearly_cutoff, host_id.clone())).await {
                     eprintln!("Warning: Failed to prune yearly data on remote: {}", e);
                 }
             }
         }
 
-        // Top days (keep only top N entries per interface)
-        let mut rows = self.local_conn.query("SELECT DISTINCT interface FROM top", params![]).await?;
+        // Top days (keep only top N entries per interface belonging to this host)
+        let mut rows = self.local_conn.query("SELECT id FROM interface WHERE host_id = ?", [host_id.clone()]).await?;
         let mut interfaces = Vec::new();
         while let Some(row) = rows.next().await? {
             interfaces.push(row.get::<String>(0)?);
@@ -404,3 +405,63 @@ impl Db {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use crate::config::Config;
+
+    #[tokio::test]
+    async fn test_prune_stats_host_isolation() -> Result<()> {
+        let db_path = PathBuf::from("test_prune.db");
+        if db_path.exists() { let _ = std::fs::remove_file(&db_path); }
+
+        let db = Db::open(db_path.clone(), None, None, Some("host-a".to_string())).await?;
+        
+        // Create another host manually
+        let host_b_id = "host-b-id".to_string();
+        db.local_conn.execute(
+            "INSERT INTO host (id, machine_id, hostname) VALUES (?, ?, ?)",
+            (host_b_id.clone(), host_b_id.clone(), "host-b")
+        ).await?;
+
+        // Create interfaces
+        let iface_a = db.create_interface("eth0", 0, 0, None).await?;
+        
+        // Manually create interface for host B
+        let iface_b = format!("{}:eth0", host_b_id);
+        db.local_conn.execute(
+            "INSERT INTO interface (id, host_id, name, created, updated) VALUES (?, ?, ?, ?, ?)",
+            (iface_b.clone(), host_b_id.clone(), "eth0", 0, 0)
+        ).await?;
+
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let old_date = now - (100 * 3600); // 100 hours ago
+
+        // Add traffic for both
+        db.add_traffic(&iface_a, "fiveminute", old_date, 100, 100).await?;
+        db.add_traffic(&iface_b, "fiveminute", old_date, 200, 200).await?;
+
+        // Configure retention: 5MinuteHours = 48
+        let mut config = Config::default();
+        config.five_minute_hours = 48;
+
+        // Prune as Host A
+        db.prune_stats(&config).await?;
+
+        // Check if Host A's data is gone
+        let mut rows_a = db.local_conn.query("SELECT count(*) FROM fiveminute WHERE interface = ?", [iface_a]).await?;
+        let count_a: i64 = rows_a.next().await?.unwrap().get(0)?;
+        assert_eq!(count_a, 0);
+
+        // Check if Host B's data is still there
+        let mut rows_b = db.local_conn.query("SELECT count(*) FROM fiveminute WHERE interface = ?", [iface_b]).await?;
+        let count_b: i64 = rows_b.next().await?.unwrap().get(0)?;
+        assert_eq!(count_b, 1);
+
+        if db_path.exists() { let _ = std::fs::remove_file(&db_path); }
+        Ok(())
+    }
+}
+
