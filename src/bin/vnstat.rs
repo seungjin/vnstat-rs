@@ -232,8 +232,16 @@ struct Cli {
     dbdir: Option<PathBuf>,
 
     /// Path to config file
-    #[arg(short = 'c', long, value_name = "FILE")]
+    #[arg(short, long, value_name = "FILE")]
     config: Option<PathBuf>,
+
+    /// Get a value from the universal config table
+    #[arg(long, value_name = "NAME")]
+    get: Option<String>,
+
+    /// Set a value in the universal config table
+    #[arg(long, num_args = 2, value_names = ["NAME", "VALUE"])]
+    set: Option<Vec<String>>,
 }
 
 #[tokio::main]
@@ -308,7 +316,13 @@ async fn main() -> Result<()> {
         if socket_path.exists() {
             let mut requested_table = String::new();
             let mut requested_limit = 0;
-            let req = if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
+            let req = if let Some(name) = cli.get.clone() {
+                Some(IpcRequest::GetConfig { name })
+            } else if let Some(kv) = cli.set.clone() {
+                if kv.len() == 2 {
+                    Some(IpcRequest::SetConfig { name: kv[0].clone(), value: kv[1].clone() })
+                } else { None }
+            } else if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
                 let (table, limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(30)) }
                     else if let Some(l) = cli.hours { ("hour", l.unwrap_or(30)) }
                     else if let Some(l) = cli.days { ("day", l.unwrap_or(30)) }
@@ -372,6 +386,17 @@ async fn main() -> Result<()> {
                         }
                         return Ok(());
                     }
+                    Ok(IpcResponse::Config(val)) => {
+                        if let Some(v) = val {
+                            println!("{}", v);
+                        } else {
+                            println!("(not set)");
+                        }
+                        return Ok(());
+                    }
+                    Ok(IpcResponse::Ok) => {
+                        return Ok(());
+                    }
                     Ok(IpcResponse::Error(e)) => {
                         eprintln!("Daemon error: {}", e);
                     }
@@ -410,6 +435,22 @@ async fn main() -> Result<()> {
         println!("{:<15} {:<15} {:<15}", "Interface", "RX Total", "TX Total");
         for s in stats {
             println!("{:<15} {:<15} {:<15}", s.name, format_bytes(s.rx_bytes), format_bytes(s.tx_bytes));
+        }
+        return Ok(());
+    }
+
+    if let Some(name) = cli.get.as_ref() {
+        if let Some(val) = db.get_info(name).await? {
+            println!("{}", val);
+        } else {
+            println!("(not set)");
+        }
+        return Ok(());
+    }
+
+    if let Some(kv) = cli.set.as_ref() {
+        if kv.len() == 2 {
+            db.set_info(&kv[0], &kv[1]).await?;
         }
         return Ok(());
     }

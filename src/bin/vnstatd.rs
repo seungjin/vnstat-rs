@@ -231,6 +231,18 @@ async fn main() -> Result<()> {
                                             machine_id: db.machine_id.clone(),
                                         }
                                     }
+                                    Ok(IpcRequest::GetConfig { name }) => {
+                                        match db.get_info(&name).await {
+                                            Ok(val) => IpcResponse::Config(val),
+                                            Err(e) => IpcResponse::Error(e.to_string()),
+                                        }
+                                    }
+                                    Ok(IpcRequest::SetConfig { name, value }) => {
+                                        match db.set_info(&name, &value).await {
+                                            Ok(_) => IpcResponse::Ok,
+                                            Err(e) => IpcResponse::Error(e.to_string()),
+                                        }
+                                    }
                                     Err(e) => IpcResponse::Error(e.to_string()),
                                 };
                                 let resp_json = serde_json::to_vec(&resp).unwrap();

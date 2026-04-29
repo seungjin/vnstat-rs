@@ -12,6 +12,8 @@ pub enum IpcRequest {
     },
     GetSummary { interface: Option<String> },
     GetInfo,
+    GetConfig { name: String },
+    SetConfig { name: String, value: String },
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -20,5 +22,7 @@ pub enum IpcResponse {
     History(Vec<HistoryEntry>),
     Summary(Vec<SummaryData>),
     Info { hostname: String, machine_id: String },
+    Config(Option<String>),
+    Ok,
     Error(String),
 }

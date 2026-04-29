@@ -95,6 +95,23 @@ impl Db {
         Ok(())
     }
 
+    pub async fn get_info(&self, name: &str) -> Result<Option<String>> {
+        let mut rows = self.conn.query("SELECT value FROM info WHERE name = ?", (name,)).await?;
+        if let Some(row) = rows.next().await? {
+            return Ok(Some(row.get(0)?));
+        }
+        Ok(None)
+    }
+
+    pub async fn set_info(&self, name: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO info (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+            (name, value),
+        ).await?;
+        self.sync().await?;
+        Ok(())
+    }
+
     pub async fn get_current_version(&self) -> Result<i32> {
         // Ensure table exists
         self.conn.execute("CREATE TABLE IF NOT EXISTS database_schema (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)", ()).await?;
