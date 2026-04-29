@@ -8,7 +8,7 @@ use crate::utils::{get_machine_id, parse_net_dev, format_bytes};
 
 pub enum DbType {
     Local(turso::Database),
-    Sync(turso::sync::Database),
+    Remote(turso::sync::Database),
 }
 
 pub struct Db {
@@ -24,28 +24,23 @@ const CURRENT_VERSION: i32 = 4;
 
 impl Db {
     pub async fn open(path: PathBuf, url: Option<String>, token: Option<String>) -> Result<Self> {
-        if let Some(parent) = path.parent() {
-            if !parent.exists() {
-                println!("Creating database directory {}...", parent.display());
-                fs::create_dir_all(parent).context("Failed to create database directory")?;
-            }
-        }
-
-        let path_str = path.to_string_lossy().to_string();
-        
         let (db_type, conn) = if let (Some(url), Some(token)) = (url, token) {
-            println!("Opening remote replica at {}...", url);
-            let db = turso::sync::Builder::new_remote(&path_str)
+            println!("Connecting directly to remote database at {}...", url);
+            let db = turso::sync::Builder::new_remote(":memory:")
                 .with_remote_url(url)
                 .with_auth_token(token)
                 .build()
                 .await?;
-            
             let conn = db.connect().await?;
-            let db_type = DbType::Sync(db);
-            
-            (db_type, conn)
+            (DbType::Remote(db), conn)
         } else {
+            if let Some(parent) = path.parent() {
+                if !parent.exists() {
+                    println!("Creating database directory {}...", parent.display());
+                    fs::create_dir_all(parent).context("Failed to create database directory")?;
+                }
+            }
+            let path_str = path.to_string_lossy().to_string();
             let db = turso::Builder::new_local(&path_str).build().await?;
             let conn = db.connect()?;
             (DbType::Local(db), conn)
@@ -58,21 +53,11 @@ impl Db {
         db_obj.init_schema().await?;
         db_obj.host_id = db_obj.get_or_create_host().await?;
 
-        if let DbType::Sync(_) = db_obj.db {
-            let _ = db_obj.sync().await;
-        }
-
         Ok(db_obj)
     }
 
     pub async fn sync(&self) -> Result<()> {
-        if let DbType::Sync(ref db) = self.db {
-            println!("Syncing with remote (push)...");
-            db.push().await?;
-            println!("Sync complete.");
-        } else {
-            println!("Skipping sync: No remote database configured.");
-        }
+        // Direct remote doesn't need manual sync/push
         Ok(())
     }
 
