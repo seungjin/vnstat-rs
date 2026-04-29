@@ -3,23 +3,32 @@ use chrono::Datelike;
 use std::fs;
 use std::path::{PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
 use crate::models::{InterfaceStats, HistoryEntry, SummaryData};
 use crate::utils::{get_machine_id, parse_net_dev, format_bytes};
+use serde::Deserialize;
+use libsql::{Builder, Connection, Database, params};
 
 pub enum DbType {
-    Local(turso::Database),
-    Remote(turso::sync::Database),
+    Local(Arc<Database>),
+    Remote(Arc<Database>),
 }
 
 pub struct Db {
     pub db: DbType,
-    pub conn: turso::Connection,
+    pub conn: Connection,
     pub hostname: String,
     pub machine_id: String,
     pub host_id: String,
 }
 
-const SCHEMA_SQL: &str = include_str!("../schema.sql");
+#[derive(Deserialize)]
+struct Schema {
+    version: i64,
+    sql: String,
+}
+
+const SCHEMA_TOML: &str = include_str!("../schema.sql.toml");
 
 struct Migration {
     version: i32,
@@ -32,15 +41,11 @@ const MIGRATIONS: &[Migration] = &[
 
 impl Db {
     pub async fn open(path: PathBuf, url: Option<String>, token: Option<String>) -> Result<Self> {
-        let (db_type, conn) = if let (Some(url), Some(token)) = (url, token) {
-            println!("Connecting to remote database at {}...", url);
-            let db = turso::sync::Builder::new_remote(":memory:")
-                .with_remote_url(url)
-                .with_auth_token(token)
-                .build()
-                .await?;
-            let conn = db.connect().await?;
-            (DbType::Remote(db), conn)
+        let (db_type, database) = if let (Some(url), Some(token)) = (url, token) {
+            println!("Connecting directly to remote database at {}...", url);
+            let db = Builder::new_remote(url, token).build().await?;
+            let db_arc = Arc::new(db);
+            (DbType::Remote(Arc::clone(&db_arc)), db_arc)
         } else {
             if let Some(parent) = path.parent() {
                 if !parent.exists() {
@@ -49,11 +54,12 @@ impl Db {
                 }
             }
             let path_str = path.to_string_lossy().to_string();
-            let db = turso::Builder::new_local(&path_str).build().await?;
-            let conn = db.connect()?;
-            (DbType::Local(db), conn)
+            let db = Builder::new_local(path_str).build().await?;
+            let db_arc = Arc::new(db);
+            (DbType::Local(Arc::clone(&db_arc)), db_arc)
         };
 
+        let conn = database.connect()?;
         let hostname = hostname::get()?.to_string_lossy().to_string();
         let machine_id = get_machine_id()?;
 
@@ -65,38 +71,17 @@ impl Db {
     }
 
     pub async fn sync(&self) -> Result<()> {
-        if let DbType::Remote(ref db) = self.db {
-            db.push().await?;
-        }
+        // Direct remote connections using Hrana (libsql remote) don't need manual push/pull
         Ok(())
     }
 
     pub async fn execute_batch(&self, sql: &str) -> Result<()> {
-        let mut clean_sql = String::new();
-        for line in sql.lines() {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() && !trimmed.starts_with("--") {
-                if let Some(pos) = trimmed.find("--") {
-                    clean_sql.push_str(&trimmed[..pos]);
-                } else {
-                    clean_sql.push_str(trimmed);
-                }
-                clean_sql.push(' ');
-            }
-        }
-
-        for statement in clean_sql.split(';') {
-            let trimmed = statement.trim();
-            if !trimmed.is_empty() {
-                self.conn.execute(trimmed, ()).await?;
-            }
-        }
-        self.sync().await?;
+        self.conn.execute_batch(sql).await?;
         Ok(())
     }
 
     pub async fn get_info(&self, name: &str) -> Result<Option<String>> {
-        let mut rows = self.conn.query("SELECT value FROM info WHERE name = ?", (name,)).await?;
+        let mut rows = self.conn.query("SELECT value FROM info WHERE name = ?", [name]).await?;
         if let Some(row) = rows.next().await? {
             return Ok(Some(row.get(0)?));
         }
@@ -106,14 +91,12 @@ impl Db {
     pub async fn set_info(&self, name: &str, value: &str) -> Result<()> {
         self.conn.execute(
             "INSERT INTO info (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value",
-            (name, value),
+            [name, value],
         ).await?;
-        self.sync().await?;
         Ok(())
     }
 
     pub async fn get_current_version(&self) -> Result<i32> {
-        // Ensure table exists
         self.conn.execute("CREATE TABLE IF NOT EXISTS database_schema (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)", ()).await?;
         
         let mut rows = self.conn.query("SELECT MAX(version) FROM database_schema", ()).await?;
@@ -123,32 +106,17 @@ impl Db {
             }
         }
 
-        // Check legacy tables
         let mut v = 0;
-        
-        // Try info table with schema_version key
         if let Ok(mut r) = self.conn.query("SELECT value FROM info WHERE name = 'schema_version'", ()).await {
             if let Some(row) = r.next().await? {
                 v = row.get::<String>(0)?.parse().unwrap_or(0);
             }
         } 
-        // Then try info table with old version key
         if v == 0 {
             if let Ok(mut r) = self.conn.query("SELECT value FROM info WHERE name = 'version'", ()).await {
                 if let Some(row) = r.next().await? {
                     v = row.get::<String>(0)?.parse().unwrap_or(0);
-                    // Update key to schema_version
                     let _ = self.conn.execute("UPDATE info SET name = 'schema_version' WHERE name = 'version'", ()).await;
-                }
-            }
-        }
-        // Finally try schema_info table if it exists (from a previous migration)
-        if v == 0 {
-            if let Ok(mut r) = self.conn.query("SELECT value FROM schema_info WHERE name = 'version'", ()).await {
-                if let Some(row) = r.next().await? {
-                    v = row.get::<String>(0)?.parse().unwrap_or(0);
-                    // Drop schema_info if we're moving back to info
-                    let _ = self.conn.execute("DROP TABLE schema_info", ()).await;
                 }
             }
         }
@@ -162,35 +130,29 @@ impl Db {
     }
 
     pub async fn init_schema(&self) -> Result<()> {
+        let schema: Schema = toml::from_str(SCHEMA_TOML).context("Failed to parse schema.sql.toml")?;
+        
         let mut current = self.get_current_version().await?;
 
-        // Fresh install
         if current == 0 {
-            println!("Initializing fresh database schema...");
-            for statement in SCHEMA_SQL.split(';') {
-                let trimmed = statement.trim();
-                if !trimmed.is_empty() {
-                    let _ = self.conn.execute(trimmed, ()).await;
-                }
-            }
+            println!("Initializing fresh database schema (v{})...", schema.version);
+            self.execute_batch(&schema.sql).await?;
             let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-            self.conn.execute("INSERT INTO database_schema (version, applied_at) VALUES (4, ?)", (now,)).await?;
-            current = 4;
+            self.conn.execute("INSERT INTO database_schema (version, applied_at) VALUES (?, ?)", (schema.version, now)).await?;
+            self.set_info("schema_version", &schema.version.to_string()).await?;
+            current = schema.version as i32;
         }
 
-        // Apply migrations
         for migration in MIGRATIONS {
             if migration.version > current {
                 self.run_migration(migration.version, migration.description).await?;
             }
         }
 
-        self.sync().await?;
         Ok(())
     }
 
     async fn run_migration(&self, version: i32, description: &str) -> Result<()> {
-        // Re-check version from DB to avoid double-migration in multi-host setups
         let current = self.get_current_version().await?;
         if current >= version {
             return Ok(());
@@ -200,16 +162,9 @@ impl Db {
 
         match version {
             4 => {
-                let _ = self.conn.execute("PRAGMA foreign_keys = OFF", ()).await;
-                
-                // Final safety check: does host table already use TEXT?
                 let mut needs_v4 = true;
-                if let Ok(mut r) = self.conn.query("PRAGMA table_info(host)", ()).await {
-                    while let Some(row) = r.next().await? {
-                        if row.get::<String>(1)? == "id" && row.get::<String>(2)? == "TEXT" {
-                            needs_v4 = false;
-                            break;
-                        }
+                if let Ok(mut r) = self.conn.query("SELECT name FROM sqlite_master WHERE type='table' AND name='host'", ()).await {
+                    if r.next().await?.is_some() {
                     }
                 }
 
@@ -223,12 +178,8 @@ impl Db {
                         let _ = self.conn.execute(&format!("DROP TABLE IF EXISTS {}", table), ()).await;
                     }
 
-                    for statement in SCHEMA_SQL.split(';') {
-                        let trimmed = statement.trim();
-                        if !trimmed.is_empty() {
-                            let _ = self.conn.execute(trimmed, ()).await;
-                        }
-                    }
+                    let schema: Schema = toml::from_str(SCHEMA_TOML).context("Failed to parse schema.sql.toml")?;
+                    self.execute_batch(&schema.sql).await?;
 
                     let mut host_mig_rows = self.conn.query("SELECT count(*) FROM host_mig", ()).await?;
                     let host_count: i64 = if let Some(row) = host_mig_rows.next().await? {
@@ -256,14 +207,13 @@ impl Db {
                     let _ = self.conn.execute("DROP TABLE IF EXISTS interface_mig", ()).await;
                     let _ = self.conn.execute("DROP TABLE IF EXISTS traffic_mig", ()).await;
                 }
-                let _ = self.conn.execute("PRAGMA foreign_keys = ON", ()).await;
             },
             _ => return Err(anyhow::anyhow!("Unknown migration version {}", version)),
         }
 
-        // Record successful migration
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-        self.conn.execute("INSERT INTO database_schema (version, applied_at) VALUES (?, ?)", (version, now)).await?;
+        self.conn.execute("INSERT INTO database_schema (version, applied_at) VALUES (?, ?)", (version as i64, now)).await?;
+        self.set_info("schema_version", &version.to_string()).await?;
         
         println!("Migration v{} complete.", version);
         Ok(())
@@ -272,22 +222,21 @@ impl Db {
     pub async fn get_or_create_host(&self) -> Result<String> {
         self.conn.execute(
             "INSERT OR IGNORE INTO host (id, machine_id, hostname) VALUES (?, ?, ?)",
-            (self.machine_id.clone(), self.machine_id.clone(), self.hostname.clone()),
+            [self.machine_id.clone(), self.machine_id.clone(), self.hostname.clone()],
         ).await?;
 
         self.conn.execute(
             "UPDATE host SET hostname = ? WHERE id = ?",
-            (self.hostname.clone(), self.machine_id.clone()),
+            [self.hostname.clone(), self.machine_id.clone()],
         ).await?;
 
-        self.sync().await?;
         Ok(self.machine_id.clone())
     }
 
     pub async fn get_interface(&self, name: &str) -> Result<Option<(String, u64, u64)>> {
         let mut rows = self.conn.query(
             "SELECT id, rxcounter, txcounter FROM interface WHERE host_id = ? AND name = ?", 
-            (self.host_id.clone(), name)
+            [self.host_id.clone(), name.to_string()]
         ).await?;
         
         if let Some(row) = rows.next().await? {
@@ -301,10 +250,9 @@ impl Db {
         let id = format!("{}:{}", self.host_id, name);
         self.conn.execute(
             "INSERT INTO interface (id, host_id, name, created, updated, rxcounter, txcounter) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (id.clone(), self.host_id.clone(), name, now, now, rx as i64, tx as i64),
+            (id.clone(), self.host_id.clone(), name.to_string(), now, now, rx as i64, tx as i64),
         ).await?;
 
-        self.sync().await?;
         Ok(id)
     }
 
@@ -312,22 +260,21 @@ impl Db {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         self.conn.execute(
             "UPDATE interface SET updated = ?, rxcounter = ?, txcounter = ?, rxtotal = rxtotal + ?, txtotal = txtotal + ? WHERE id = ?",
-            (now, rx as i64, tx as i64, rx_delta as i64, tx_delta as i64, id),
+            (now, rx as i64, tx as i64, rx_delta as i64, tx_delta as i64, id.to_string()),
         ).await?;
-        self.sync().await?;
         Ok(())
     }
 
     pub async fn add_traffic(&self, interface_id: &str, table: &str, date: i64, rx: u64, tx: u64) -> Result<()> {
-        self.conn.execute(
-            &format!(
+        let sql = format!(
                 "INSERT INTO {} (interface, date, rx, tx) VALUES (?, ?, ?, ?)
                  ON CONFLICT(interface, date) DO UPDATE SET rx = rx + excluded.rx, tx = tx + excluded.tx",
                 table
-            ),
-            (interface_id, date, rx as i64, tx as i64),
+            );
+        self.conn.execute(
+            &sql,
+            (interface_id.to_string(), date, rx as i64, tx as i64),
         ).await?;
-        self.sync().await?;
         Ok(())
     }
 
@@ -395,14 +342,14 @@ impl Db {
     }
 
     pub async fn get_all_interface_stats(&self, filter_iface: Option<&str>) -> Result<Vec<InterfaceStats>> {
-        let mut query = "SELECT i.name, i.alias, i.rxtotal, i.txtotal, h.hostname, i.created, i.updated 
+        let mut query_str = "SELECT i.name, i.alias, i.rxtotal, i.txtotal, h.hostname, i.created, i.updated 
                          FROM interface i 
                          JOIN host h ON i.host_id = h.id".to_string();
         if let Some(iface) = filter_iface {
-            query.push_str(&format!(" WHERE i.name = '{}' ", iface));
+            query_str.push_str(&format!(" WHERE i.name = '{}' ", iface));
         }
         
-        let mut rows = self.conn.query(&query, ()).await?;
+        let mut rows = self.conn.query(&query_str, ()).await?;
         let mut stats = Vec::new();
         while let Some(row) = rows.next().await? {
             stats.push(InterfaceStats {
@@ -421,31 +368,31 @@ impl Db {
     }
 
     pub async fn get_history(&self, table: &str, filter_iface: Option<&str>, limit: usize, begin: Option<i64>, end: Option<i64>) -> Result<Vec<HistoryEntry>> {
-        let mut query = format!(
+        let mut query_str = format!(
             "SELECT h.hostname, i.name, t.date, t.rx, t.tx 
              FROM interface i 
              JOIN host h ON i.host_id = h.id
              JOIN {} t ON i.id = t.interface WHERE 1=1 ", table);
         
         if let Some(iface) = filter_iface {
-            query.push_str(&format!("AND i.name = '{}' ", iface));
+            query_str.push_str(&format!("AND i.name = '{}' ", iface));
         }
 
         if let Some(b) = begin {
-            query.push_str(&format!("AND t.date >= {} ", b));
+            query_str.push_str(&format!("AND t.date >= {} ", b));
         }
 
         if let Some(e) = end {
-            query.push_str(&format!("AND t.date <= {} ", e));
+            query_str.push_str(&format!("AND t.date <= {} ", e));
         }
 
         if table == "top" {
-            query.push_str(&format!("ORDER BY (t.rx + t.tx) DESC LIMIT {}", limit));
+            query_str.push_str(&format!("ORDER BY (t.rx + t.tx) DESC LIMIT {}", limit));
         } else {
-            query.push_str(&format!("ORDER BY t.date DESC LIMIT {}", limit));
+            query_str.push_str(&format!("ORDER BY t.date DESC LIMIT {}", limit));
         }
 
-        let mut rows = self.conn.query(&query, ()).await?;
+        let mut rows = self.conn.query(&query_str, ()).await?;
         let mut history = Vec::new();
         while let Some(row) = rows.next().await? {
             history.push(HistoryEntry {
