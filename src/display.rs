@@ -40,6 +40,9 @@ pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
         host_summaries.sort_by(|a, b| a.name.cmp(&b.name));
 
         for summary in host_summaries {
+            if summary.name == "lo" {
+                continue;
+            }
             println!("   {}:", summary.name);
 
             let print_line = |label: &str, rx: u64, tx: u64, est: Option<String>| {
@@ -108,6 +111,9 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
     let now_ts = now.timestamp();
 
     for iface in interfaces {
+        if iface == "lo" {
+            continue;
+        }
         let entries = by_interface.get(&iface).unwrap();
         let title = match table {
             "fiveminute" => "five minute".to_string(),

@@ -3,7 +3,7 @@ use clap::{Parser};
 use std::path::{PathBuf};
 use tokio::net::UnixStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use vnstat_rs::{Db, parse_net_dev, format_bytes, IpcRequest, IpcResponse, print_summary_table, print_history_table, print_95th_table, format_rate};
+use vnstat_rs::{Db, IpcRequest, IpcResponse, print_summary_table, print_history_table, print_95th_table, format_rate};
 
 async fn request_daemon(socket_path: &PathBuf, req: IpcRequest) -> Result<IpcResponse> {
     let mut stream = UnixStream::connect(socket_path).await?;
@@ -36,15 +36,25 @@ async fn run_live(iface: Option<String>) -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("Interface \"{}\" not found.", filter))?
     } else {
         // Find first interface with traffic, excluding lo
-        stats.iter()
+        let found = stats.iter()
             .filter(|s| s.name != "lo" && (s.rx_bytes > 0 || s.tx_bytes > 0))
             .map(|s| s.name.clone())
-            .next()
-            .unwrap_or_else(|| {
+            .next();
+            
+        match found {
+            Some(name) => name,
+            None => {
                 // Fallback to first non-lo
                 stats.iter().find(|s| s.name != "lo").map(|s| s.name.clone())
-                    .unwrap_or_else(|| stats[0].name.clone())
-            })
+                    .unwrap_or_else(|| {
+                        if stats.is_empty() {
+                            "eth0".to_string() // Very last resort fallback
+                        } else {
+                            stats[0].name.clone()
+                        }
+                    })
+            }
+        }
     };
 
     println!("Monitoring {}...    (press CTRL-C to stop)", selected_iface);
@@ -266,6 +276,15 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    if cli.iflist {
+        let stats = vnstat_rs::parse_net_dev()?;
+        println!("{:<15} {:<15} {:<15}", "Interface", "RX Total", "TX Total");
+        for s in stats {
+            println!("{:<15} {:<15} {:<15}", s.name, vnstat_rs::format_bytes(s.rx_bytes), vnstat_rs::format_bytes(s.tx_bytes));
+        }
+        return Ok(());
+    }
+
     if cli.live.is_some() {
         run_live(cli.iface.clone()).await?;
         return Ok(());
@@ -434,7 +453,14 @@ async fn main() -> Result<()> {
         .or(file_config.database)
         .unwrap_or_else(|| PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
     
-    let db = match Db::open(db_path, file_config.url.clone(), file_config.token.clone(), file_config.hostname_override.clone()).await {
+    // Determine if we need a remote connection
+    let (url, token) = if cli.host.is_some() || cli.host_all {
+        (file_config.url.clone(), file_config.token.clone())
+    } else {
+        (None, None)
+    };
+
+    let db = match Db::open(db_path, url, token, file_config.hostname_override.clone()).await {
         Ok(db) => db,
         Err(e) => {
             if e.to_string().contains("locked") {
@@ -451,15 +477,6 @@ async fn main() -> Result<()> {
 
     if cli.update {
         db.update_stats(cli.iface.as_deref()).await?;
-        return Ok(());
-    }
-
-    if cli.iflist {
-        let stats = parse_net_dev()?;
-        println!("{:<15} {:<15} {:<15}", "Interface", "RX Total", "TX Total");
-        for s in stats {
-            println!("{:<15} {:<15} {:<15}", s.name, format_bytes(s.rx_bytes), format_bytes(s.tx_bytes));
-        }
         return Ok(());
     }
 

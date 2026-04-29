@@ -4,6 +4,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 impl Db {
     pub async fn get_interface(&self, name: &str) -> Result<Option<(String, u64, u64, Option<String>)>> {
+        if name == "lo" {
+            return Ok(None);
+        }
         let mut rows = self.local_conn.query(
             "SELECT id, rxcounter, txcounter, mac_address FROM interface WHERE host_id = ? AND name = ?", 
             [self.host_id.clone(), name.to_string()]
@@ -49,6 +52,16 @@ impl Db {
         self.local_conn.execute(sql, (mac.to_string(), id.to_string())).await?;
         if let Some(ref remote) = self.remote_conn {
             let _ = remote.execute(sql, (mac.to_string(), id.to_string())).await;
+        }
+        Ok(())
+    }
+
+    pub async fn set_interface_active(&self, id: &str, active: bool) -> Result<()> {
+        let sql = "UPDATE interface SET active = ? WHERE id = ?";
+        let active_val = if active { 1 } else { 0 };
+        self.local_conn.execute(sql, (active_val, id.to_string())).await?;
+        if let Some(ref remote) = self.remote_conn {
+            let _ = remote.execute(sql, (active_val, id.to_string())).await;
         }
         Ok(())
     }

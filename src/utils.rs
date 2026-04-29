@@ -51,6 +51,9 @@ pub fn parse_net_dev() -> Result<Vec<InterfaceStats>> {
         }
 
         let name = parts[0].trim().to_string();
+        if name == "lo" {
+            continue;
+        }
         let data_parts: Vec<&str> = parts[1].split_whitespace().collect();
         
         if data_parts.len() < 10 {

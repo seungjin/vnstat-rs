@@ -49,6 +49,7 @@ impl Db {
 
     pub async fn update_stats(&self, filter_iface: Option<&str>) -> Result<()> {
         let stats = parse_net_dev()?;
+        let mut seen_ids = std::collections::HashSet::new();
 
         for stat in stats {
             if let Some(f) = filter_iface {
@@ -57,6 +58,11 @@ impl Db {
                 }
             }
             if let Some((id, last_rx, last_tx, current_mac)) = self.get_interface(&stat.name).await? {
+                seen_ids.insert(id.clone());
+                
+                // Mark as active if it was inactive
+                let _ = self.set_interface_active(&id, true).await;
+
                 if current_mac.is_none() || current_mac.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
                     if let Some(ref new_mac) = stat.mac_address {
                         let _ = self.update_interface_mac(&id, new_mac).await;
@@ -80,10 +86,26 @@ impl Db {
                 }
             } else {
                 let id = self.create_interface(&stat.name, stat.rx_bytes, stat.tx_bytes, stat.mac_address).await?;
+                seen_ids.insert(id.clone());
                 self.add_history_entry(&id, 0, 0).await?;
                 println!("New interface found: {} (host: {})", stat.name, self.hostname);
             }
         }
+
+        // If not filtering, mark interfaces not seen in this pass as inactive
+        if filter_iface.is_none() {
+            let all_ifaces = self.get_all_interface_stats(None, Some(&self.machine_id)).await?;
+            for iface_stat in all_ifaces {
+                // We need the internal ID to mark inactive. 
+                // Since get_all_interface_stats doesn't return ID, we'll use a new helper or get_interface
+                if let Some((id, _, _, _)) = self.get_interface(&iface_stat.name).await? {
+                    if !seen_ids.contains(&id) {
+                        let _ = self.set_interface_active(&id, false).await;
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -96,7 +118,7 @@ impl Db {
 
         let mut query_str = "SELECT i.name, i.alias, i.mac_address, i.rxtotal, i.txtotal, h.hostname, i.created, i.updated 
                          FROM interface i 
-                         JOIN host h ON i.host_id = h.id WHERE 1=1 ".to_string();
+                         JOIN host h ON i.host_id = h.id WHERE i.name != 'lo' AND i.active = 1 ".to_string();
         
         if let Some(iface) = filter_iface {
             query_str.push_str(&format!(" AND i.name = '{}' ", iface));
@@ -136,7 +158,7 @@ impl Db {
             "SELECT h.hostname, i.name, t.date, t.rx, t.tx 
              FROM interface i 
              JOIN host h ON i.host_id = h.id
-             JOIN {} t ON i.id = t.interface WHERE 1=1 ", table);
+             JOIN {} t ON i.id = t.interface WHERE i.name != 'lo' AND i.active = 1 ", table);
         
         if let Some(iface) = filter_iface {
             query_str.push_str(&format!("AND i.name = '{}' ", iface));
@@ -182,7 +204,7 @@ impl Db {
             &self.local_conn
         };
 
-        let mut ifaces_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE 1=1 ".to_string();
+        let mut ifaces_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE i.name != 'lo' AND i.active = 1".to_string();
         
         if let Some(iface) = filter_iface {
             ifaces_query.push_str(&format!(" AND i.name = '{}'", iface));
@@ -250,7 +272,7 @@ impl Db {
         };
 
         // Find the specific interface
-        let mut iface_query = "SELECT i.id, i.name, h.hostname FROM interface i JOIN host h ON i.host_id = h.id WHERE 1=1 ".to_string();
+        let mut iface_query = "SELECT i.id, i.name, h.hostname FROM interface i JOIN host h ON i.host_id = h.id WHERE i.name != 'lo' AND i.active = 1 ".to_string();
         if let Some(iface) = filter_iface {
             iface_query.push_str(&format!(" AND i.name = '{}'", iface));
         }
