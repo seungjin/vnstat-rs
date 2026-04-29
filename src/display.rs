@@ -1,0 +1,240 @@
+use crate::models::{HistoryEntry, SummaryData};
+use crate::utils::format_bytes;
+use chrono::{DateTime, Datelike, Utc};
+
+pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
+    if summaries.is_empty() {
+        println!("No data available for the selected host(s).");
+        return;
+    }
+
+    // Group by hostname
+    let mut by_host: std::collections::HashMap<String, Vec<SummaryData>> = std::collections::HashMap::new();
+    for s in summaries {
+        by_host.entry(s.hostname.clone()).or_default().push(s);
+    }
+
+    let mut hostnames: Vec<_> = by_host.keys().cloned().collect();
+    hostnames.sort();
+
+    let now = Utc::now();
+    let now_ts = now.timestamp();
+    let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let today_ts = DateTime::<Utc>::from_naive_utc_and_offset(today_start, Utc).timestamp();
+
+    let this_month_start = now.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+    let this_month_ts = DateTime::<Utc>::from_naive_utc_and_offset(this_month_start, Utc).timestamp();
+    
+    let last_month_date = if now.month() == 1 {
+        now.date_naive().with_year(now.year() - 1).unwrap().with_month(12).unwrap().with_day(1).unwrap()
+    } else {
+        now.date_naive().with_month(now.month() - 1).unwrap().with_day(1).unwrap()
+    };
+    let last_month_ts = DateTime::<Utc>::from_naive_utc_and_offset(last_month_date.and_hms_opt(0, 0, 0).unwrap(), Utc).timestamp();
+
+    for hostname in hostnames {
+        println!("\n Host: {}", hostname);
+        println!("                      rx      /      tx      /     total    /   estimated");
+        
+        let mut host_summaries = by_host.remove(&hostname).unwrap();
+        host_summaries.sort_by(|a, b| a.name.cmp(&b.name));
+
+        for summary in host_summaries {
+            println!("   {}:", summary.name);
+
+            let print_line = |label: &str, rx: u64, tx: u64, est: Option<String>| {
+                let total = rx + tx;
+                print!("      {:<12} {:>10}  /  {:>10}  /  {:>10}", 
+                    label, format_bytes_short(rx), format_bytes_short(tx), format_bytes_short(total));
+                if let Some(e) = est {
+                    println!("  /  {:>10}", e);
+                } else {
+                    println!();
+                }
+            };
+
+            // Monthly lines
+            let last_month_label = DateTime::from_timestamp(last_month_ts, 0).unwrap().format("%Y-%m").to_string();
+            let (lm_rx, lm_tx) = summary.last_month;
+            print_line(&last_month_label, lm_rx, lm_tx, None);
+
+            let this_month_label = DateTime::from_timestamp(this_month_ts, 0).unwrap().format("%Y-%m").to_string();
+            let (tm_rx, tm_tx) = summary.this_month;
+            
+            let days_in_month = match now.month() {
+                1|3|5|7|8|10|12 => 31,
+                4|6|9|11 => 30,
+                2 => if (now.year() % 4 == 0 && now.year() % 100 != 0) || (now.year() % 400 == 0) { 29 } else { 28 },
+                _ => 30,
+            };
+            let current_day = now.day() as f64;
+            let tm_est = if current_day > 0.0 {
+                format_bytes_short(((tm_rx + tm_tx) as f64 * (days_in_month as f64 / current_day)) as u64)
+            } else {
+                "--".to_string()
+            };
+            print_line(&this_month_label, tm_rx, tm_tx, Some(tm_est));
+
+            // Yesterday
+            let (y_rx, y_tx) = summary.yesterday;
+            print_line("yesterday", y_rx, y_tx, None);
+
+            // Today
+            let (t_rx, t_tx) = summary.today;
+            let secs_passed = (now_ts - today_ts).max(1) as f64;
+            let t_est = format_bytes_short(((t_rx + t_tx) as f64 * (86400.0 / secs_passed)) as u64);
+            print_line("today", t_rx, t_tx, Some(t_est));
+        }
+    }
+}
+
+pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: usize) {
+    if history.is_empty() {
+        println!("No data available.");
+        return;
+    }
+
+    history.sort_by_key(|h| h.date);
+
+    let mut by_interface: std::collections::HashMap<String, Vec<HistoryEntry>> = std::collections::HashMap::new();
+    for entry in history {
+        by_interface.entry(entry.interface.clone()).or_default().push(entry);
+    }
+
+    let mut interfaces: Vec<_> = by_interface.keys().cloned().collect();
+    interfaces.sort();
+
+    let now = Utc::now();
+    let now_ts = now.timestamp();
+
+    for iface in interfaces {
+        let entries = by_interface.get(&iface).unwrap();
+        let title = match table {
+            "fiveminute" => "five minute".to_string(),
+            "hour" => "hourly".to_string(),
+            "day" => "daily".to_string(),
+            "month" => "monthly".to_string(),
+            "year" => "yearly".to_string(),
+            "top" => format!("top {}", limit),
+            _ => table.to_string(),
+        };
+
+        println!(" {}  /  {}\n", iface, title);
+        
+        let label_header = match table {
+            "fiveminute" | "hour" => "      time  ",
+            "day" => "      day   ",
+            "month" => "        month",
+            "year" => "        year ",
+            _ => "      date  ",
+        };
+
+        println!(" {:<14} {:>10} | {:>10} | {:>10} | {:>12}", 
+            label_header, "rx", "tx", "total", "avg. rate");
+        println!("     ------------------------+-------------+-------------+---------------");
+
+        for entry in entries {
+            let dt = DateTime::from_timestamp(entry.date, 0).unwrap();
+            let label = match table {
+                "fiveminute" | "hour" => dt.format("%Y-%m-%d %H:%M").to_string(),
+                "day" => dt.format("%Y-%m-%d").to_string(),
+                "month" => dt.format("%Y-%m").to_string(),
+                "year" => dt.format("%Y").to_string(),
+                _ => dt.format("%Y-%m-%d").to_string(),
+            };
+
+            let total = entry.rx + entry.tx;
+            let seconds = match table {
+                "fiveminute" => 300,
+                "hour" => 3600,
+                "day" => 86400,
+                "month" => {
+                    let year = dt.year();
+                    let month = dt.month();
+                    let days = match month {
+                        1|3|5|7|8|10|12 => 31,
+                        4|6|9|11 => 30,
+                        2 => if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) { 29 } else { 28 },
+                        _ => 30,
+                    };
+                    days * 86400
+                },
+                "year" => {
+                    if (dt.year() % 4 == 0 && dt.year() % 100 != 0) || (dt.year() % 400 == 0) { 366 * 86400 } else { 365 * 86400 }
+                },
+                _ => 86400,
+            };
+
+            let rate_bits = (total * 8) as f64 / seconds as f64;
+            let rate_str = format_rate(rate_bits);
+
+            println!("       {:<10} {:>10} | {:>11} | {:>11} | {:>14}", 
+                label, format_bytes_short(entry.rx), format_bytes_short(entry.tx), format_bytes_short(total), rate_str);
+        }
+
+        println!("     ------------------------+-------------+-------------+---------------");
+
+        if let Some(latest) = entries.last() {
+            let dt = DateTime::from_timestamp(latest.date, 0).unwrap();
+            let is_current = match table {
+                "day" => dt.date_naive() == now.date_naive(),
+                "month" => dt.year() == now.year() && dt.month() == now.month(),
+                "year" => dt.year() == now.year(),
+                _ => false,
+            };
+
+            if is_current {
+                let (secs_passed, total_secs) = match table {
+                    "day" => {
+                        let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
+                        let start_ts = DateTime::<Utc>::from_naive_utc_and_offset(today_start, Utc).timestamp();
+                        ((now_ts - start_ts).max(1) as f64, 86400.0)
+                    },
+                    "month" => {
+                        let month_start = now.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+                        let start_ts = DateTime::<Utc>::from_naive_utc_and_offset(month_start, Utc).timestamp();
+                        let days = match now.month() {
+                            1|3|5|7|8|10|12 => 31,
+                            4|6|9|11 => 30,
+                            2 => if (now.year() % 4 == 0 && now.year() % 100 != 0) || (now.year() % 400 == 0) { 29 } else { 28 },
+                            _ => 30,
+                        };
+                        ((now_ts - start_ts).max(1) as f64, (days * 86400) as f64)
+                    },
+                    "year" => {
+                        let year_start = now.date_naive().with_month(1).unwrap().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+                        let start_ts = DateTime::<Utc>::from_naive_utc_and_offset(year_start, Utc).timestamp();
+                        let days = if (now.year() % 4 == 0 && now.year() % 100 != 0) || (now.year() % 400 == 0) { 366 } else { 365 };
+                        ((now_ts - start_ts).max(1) as f64, (days * 86400) as f64)
+                    },
+                    _ => (1.0, 1.0),
+                };
+
+                if total_secs > 1.0 {
+                    let est_rx = (latest.rx as f64 * (total_secs / secs_passed)) as u64;
+                    let est_tx = (latest.tx as f64 * (total_secs / secs_passed)) as u64;
+                    let est_total = est_rx + est_tx;
+
+                    println!("     {:<12} {:>10} | {:>11} | {:>11} |", 
+                        "estimated", format_bytes_short(est_rx), format_bytes_short(est_tx), format_bytes_short(est_total));
+                }
+            }
+        }
+    }
+}
+
+pub fn format_bytes_short(bytes: u64) -> String {
+    format_bytes(bytes)
+}
+
+pub fn format_rate(bits_per_sec: f64) -> String {
+    if bits_per_sec >= 1_000_000_000.0 {
+        format!("{:.2} Mbit/s", bits_per_sec / 1_000_000.0)
+    } else if bits_per_sec >= 1_000_000.0 {
+        format!("{:.2} Mbit/s", bits_per_sec / 1_000_000.0)
+    } else if bits_per_sec >= 1_000.0 {
+        format!("{:.2} kbit/s", bits_per_sec / 1_000.0)
+    } else {
+        format!("{:.2} bit/s", bits_per_sec)
+    }
+}
