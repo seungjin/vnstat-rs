@@ -1,0 +1,11 @@
+[Unit]
+Description=vnStatd-rs network traffic monitor (User)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.cargo/bin/vnstatd-rs
+Restart=always
+
+[Install]
+WantedBy=default.target

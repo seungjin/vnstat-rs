@@ -37,6 +37,13 @@ install: release
 install-user:
     cargo install --path .
 
+# Setup systemd user service
+setup-user-service:
+    mkdir -p ~/.config/systemd/user/
+    cp vnstatd-rs.user.service ~/.config/systemd/user/vnstatd-rs.service
+    systemctl --user daemon-reload
+    @echo "User service installed. Run 'systemctl --user enable --now vnstatd-rs' to start."
+
 # Setup systemd service and data directory
 setup-service:
     sudo useradd -r -s /sbin/nologin vnstat || true

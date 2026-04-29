@@ -85,6 +85,17 @@ vnstatd-rs -c ~/.vnstat-rs.conf
 vnstatd-rs --sync-counters
 ```
 
+### User Space (Root-less)
+
+If you installed via `cargo install`, you can set up a user-space daemon:
+
+```bash
+just setup-user-service
+systemctl --user enable --now vnstatd-rs
+```
+
+This will run the daemon as your local user and store data in `~/.local/share/vnstat-rs/`.
+
 ## Configuration
 
 By default, the application looks for a configuration file at:
