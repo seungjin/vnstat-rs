@@ -30,15 +30,6 @@ struct Schema {
 
 const SCHEMA_TOML: &str = include_str!("../schema.sql.toml");
 
-struct Migration {
-    version: i32,
-    description: &'static str,
-}
-
-const MIGRATIONS: &[Migration] = &[
-    Migration { version: 4, description: "Convert IDs to TEXT for multi-host support" },
-];
-
 impl Db {
     pub async fn open(path: PathBuf, url: Option<String>, token: Option<String>) -> Result<Self> {
         let (db_type, database) = if let (Some(url), Some(token)) = (url, token) {
@@ -71,7 +62,6 @@ impl Db {
     }
 
     pub async fn sync(&self) -> Result<()> {
-        // Direct remote connections using Hrana (libsql remote) don't need manual push/pull
         Ok(())
     }
 
@@ -96,126 +86,89 @@ impl Db {
         Ok(())
     }
 
-    pub async fn get_current_version(&self) -> Result<i32> {
-        self.conn.execute("CREATE TABLE IF NOT EXISTS database_schema (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)", ()).await?;
+    pub async fn get_schema_version(&self) -> Result<i64> {
+        self.conn.execute("CREATE TABLE IF NOT EXISTS info (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, value TEXT NOT NULL)", params![]).await?;
         
-        let mut rows = self.conn.query("SELECT MAX(version) FROM database_schema", ()).await?;
-        if let Some(row) = rows.next().await? {
-            if let Ok(v) = row.get::<i32>(0) {
-                return Ok(v);
-            }
+        if let Some(v) = self.get_info("schema_version").await? {
+            return Ok(v.parse().unwrap_or(0));
         }
-
-        let mut v = 0;
-        if let Ok(mut r) = self.conn.query("SELECT value FROM info WHERE name = 'schema_version'", ()).await {
-            if let Some(row) = r.next().await? {
-                v = row.get::<String>(0)?.parse().unwrap_or(0);
-            }
-        } 
-        if v == 0 {
-            if let Ok(mut r) = self.conn.query("SELECT value FROM info WHERE name = 'version'", ()).await {
-                if let Some(row) = r.next().await? {
-                    v = row.get::<String>(0)?.parse().unwrap_or(0);
-                    let _ = self.conn.execute("UPDATE info SET name = 'schema_version' WHERE name = 'version'", ()).await;
-                }
-            }
-        }
-
-        if v > 0 {
-            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-            let _ = self.conn.execute("INSERT OR IGNORE INTO database_schema (version, applied_at) VALUES (?, ?)", (v, now)).await;
-        }
-
-        Ok(v)
+        Ok(0)
     }
 
     pub async fn init_schema(&self) -> Result<()> {
         let schema: Schema = toml::from_str(SCHEMA_TOML).context("Failed to parse schema.sql.toml")?;
-        
-        let mut current = self.get_current_version().await?;
+        let current = self.get_schema_version().await?;
 
         if current == 0 {
+            // Fresh install or uninitialized
             println!("Initializing fresh database schema (v{})...", schema.version);
             self.execute_batch(&schema.sql).await?;
-            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-            self.conn.execute("INSERT INTO database_schema (version, applied_at) VALUES (?, ?)", (schema.version, now)).await?;
             self.set_info("schema_version", &schema.version.to_string()).await?;
-            current = schema.version as i32;
-        }
-
-        for migration in MIGRATIONS {
-            if migration.version > current {
-                self.run_migration(migration.version, migration.description).await?;
-            }
+            self.set_info("version", &schema.version.to_string()).await?; 
+        } else if current < schema.version {
+            println!("Migrating database from v{} to v{}...", current, schema.version);
+            self.run_migrations(current, &schema).await?;
+            self.set_info("schema_version", &schema.version.to_string()).await?;
+            self.set_info("version", &schema.version.to_string()).await?;
+        } else {
+            // Always ensure 'version' matches 'schema_version' if we are up to date
+            self.set_info("version", &schema.version.to_string()).await?;
         }
 
         Ok(())
     }
 
-    async fn run_migration(&self, version: i32, description: &str) -> Result<()> {
-        let current = self.get_current_version().await?;
-        if current >= version {
-            return Ok(());
-        }
-
-        println!("Applying migration v{}: {}...", version, description);
-
-        match version {
-            4 => {
-                let mut needs_v4 = true;
-                if let Ok(mut r) = self.conn.query("SELECT name FROM sqlite_master WHERE type='table' AND name='host'", ()).await {
-                    if r.next().await?.is_some() {
-                    }
-                }
-
-                if needs_v4 {
-                    self.conn.execute("CREATE TEMP TABLE host_mig AS SELECT * FROM host", ()).await?;
-                    self.conn.execute("CREATE TEMP TABLE interface_mig AS SELECT * FROM interface", ()).await?;
-                    self.conn.execute("CREATE TEMP TABLE traffic_mig AS SELECT * FROM day", ()).await?;
-
-                    let tables = vec!["host", "interface", "fiveminute", "hour", "day", "month", "year", "top"];
-                    for table in &tables {
-                        let _ = self.conn.execute(&format!("DROP TABLE IF EXISTS {}", table), ()).await;
-                    }
-
-                    let schema: Schema = toml::from_str(SCHEMA_TOML).context("Failed to parse schema.sql.toml")?;
-                    self.execute_batch(&schema.sql).await?;
-
-                    let mut host_mig_rows = self.conn.query("SELECT count(*) FROM host_mig", ()).await?;
-                    let host_count: i64 = if let Some(row) = host_mig_rows.next().await? {
-                        row.get(0)?
-                    } else { 0 };
-
-                    if host_count > 0 {
-                        self.conn.execute("INSERT OR IGNORE INTO host (id, machine_id, hostname) SELECT machine_id, machine_id, hostname FROM host_mig", ()).await?;
-                        self.conn.execute("
-                            INSERT OR IGNORE INTO interface (id, host_id, name, alias, active, created, updated, rxcounter, txcounter, rxtotal, txtotal)
-                            SELECT h.machine_id || ':' || i.name, h.machine_id, i.name, i.alias, i.active, i.created, i.updated, i.rxcounter, i.txcounter, i.rxtotal, i.txtotal
-                            FROM interface_mig i JOIN host_mig h ON i.host_id = h.id
-                        ", ()).await?;
-                        
-                        self.conn.execute("
-                            INSERT OR IGNORE INTO day (interface, date, rx, tx)
-                            SELECT h.machine_id || ':' || i.name, t.date, t.rx, t.tx
-                            FROM traffic_mig t
-                            JOIN interface_mig i ON t.interface = i.id
-                            JOIN host_mig h ON i.host_id = h.id
-                        ", ()).await?;
-                    }
-
-                    let _ = self.conn.execute("DROP TABLE IF EXISTS host_mig", ()).await;
-                    let _ = self.conn.execute("DROP TABLE IF EXISTS interface_mig", ()).await;
-                    let _ = self.conn.execute("DROP TABLE IF EXISTS traffic_mig", ()).await;
-                }
-            },
-            _ => return Err(anyhow::anyhow!("Unknown migration version {}", version)),
-        }
-
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-        self.conn.execute("INSERT INTO database_schema (version, applied_at) VALUES (?, ?)", (version as i64, now)).await?;
-        self.set_info("schema_version", &version.to_string()).await?;
+    async fn run_migrations(&self, _current: i64, schema: &Schema) -> Result<()> {
+        let raw_version = self.get_info("version").await?.unwrap_or_else(|| "0".to_string());
+        let version = raw_version.parse::<i64>().unwrap_or(0);
         
-        println!("Migration v{} complete.", version);
+        // If version is a small integer (1-3), it's the old style migration path
+        if version > 0 && version < 4 {
+            println!("Applying legacy migration to version {} (TEXT IDs)...", schema.version);
+            self.migrate_to_v4(schema).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn migrate_to_v4(&self, schema: &Schema) -> Result<()> {
+        self.conn.execute("CREATE TEMP TABLE host_mig AS SELECT * FROM host", params![]).await?;
+        self.conn.execute("CREATE TEMP TABLE interface_mig AS SELECT * FROM interface", params![]).await?;
+        self.conn.execute("CREATE TEMP TABLE traffic_mig AS SELECT * FROM day", params![]).await?;
+
+        let tables = vec!["host", "interface", "fiveminute", "hour", "day", "month", "year", "top"];
+        for table in &tables {
+            let _ = self.conn.execute(&format!("DROP TABLE IF EXISTS {}", table), params![]).await;
+        }
+
+        self.execute_batch(&schema.sql).await?;
+
+        let mut host_mig_rows = self.conn.query("SELECT count(*) FROM host_mig", params![]).await?;
+        let host_count: i64 = if let Some(row) = host_mig_rows.next().await? {
+            row.get(0)?
+        } else { 0 };
+
+        if host_count > 0 {
+            self.conn.execute("INSERT OR IGNORE INTO host (id, machine_id, hostname) SELECT machine_id, machine_id, hostname FROM host_mig", params![]).await?;
+            self.conn.execute("
+                INSERT OR IGNORE INTO interface (id, host_id, name, alias, active, created, updated, rxcounter, txcounter, rxtotal, txtotal)
+                SELECT h.machine_id || ':' || i.name, h.machine_id, i.name, i.alias, i.active, i.created, i.updated, i.rxcounter, i.txcounter, i.rxtotal, i.txtotal
+                FROM interface_mig i JOIN host_mig h ON i.host_id = h.id
+            ", params![]).await?;
+            
+            self.conn.execute("
+                INSERT OR IGNORE INTO day (interface, date, rx, tx)
+                SELECT h.machine_id || ':' || i.name, t.date, t.rx, t.tx
+                FROM traffic_mig t
+                JOIN interface_mig i ON t.interface = i.id
+                JOIN host_mig h ON i.host_id = h.id
+            ", params![]).await?;
+        }
+
+        let _ = self.conn.execute("DROP TABLE IF EXISTS host_mig", params![]).await;
+        let _ = self.conn.execute("DROP TABLE IF EXISTS interface_mig", params![]).await;
+        let _ = self.conn.execute("DROP TABLE IF EXISTS traffic_mig", params![]).await;
+        
         Ok(())
     }
 
@@ -349,7 +302,7 @@ impl Db {
             query_str.push_str(&format!(" WHERE i.name = '{}' ", iface));
         }
         
-        let mut rows = self.conn.query(&query_str, ()).await?;
+        let mut rows = self.conn.query(&query_str, params![]).await?;
         let mut stats = Vec::new();
         while let Some(row) = rows.next().await? {
             stats.push(InterfaceStats {
@@ -392,7 +345,7 @@ impl Db {
             query_str.push_str(&format!("ORDER BY t.date DESC LIMIT {}", limit));
         }
 
-        let mut rows = self.conn.query(&query_str, ()).await?;
+        let mut rows = self.conn.query(&query_str, params![]).await?;
         let mut history = Vec::new();
         while let Some(row) = rows.next().await? {
             history.push(HistoryEntry {
@@ -413,7 +366,7 @@ impl Db {
         }
         ifaces_query.push_str(" ORDER BY name");
 
-        let mut iface_rows = self.conn.query(&ifaces_query, ()).await?;
+        let mut iface_rows = self.conn.query(&ifaces_query, params![]).await?;
         let mut interfaces = Vec::new();
         while let Some(row) = iface_rows.next().await? {
             interfaces.push((row.get::<String>(0)?, row.get::<String>(1)?));
