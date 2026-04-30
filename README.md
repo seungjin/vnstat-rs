@@ -14,7 +14,7 @@ Following the original vnStat architecture, this project provides two binaries:
 - **Automated Failover**: The CLI automatically detects if `vnstatd-rs` is not running and falls back to direct database access.
 - **Unique Identification**: Uses both `machine-id` (from `/etc/machine-id`) and MAC addresses to uniquely identify hosts and interfaces in a distributed environment.
 - **Hardware Tracking**: Automatically discovers and stores MAC addresses for all monitored interfaces.
-- **Root/sudo is not necessary**: Automatically switches to user-local paths (`~/.config` and `~/.local`) if system paths are not accessible.
+- **Flexible Persistence**: Automatically switches to user-local paths (`~/.config` and `~/.local`) if system paths are not accessible.
 - **Multi-host Support**: Aggregate views of all reporting hosts using the `--host-all` flag.
 - **Human-readable Output**: Displays statistics in KiB, MiB, GiB, etc., with official vnStat-compatible tabular formatting.
 - **CLI Compatibility**: Command-line arguments designed to match the original `vnstat` and `vnstatd`.
@@ -87,9 +87,9 @@ vnstatd-rs --initdb
 vnstatd-rs -c ~/.vnstat-rs.conf
 ```
 
-### User Space (Root-less)
+### User Space
 
-If you installed via `cargo install`, you can set up a user-space daemon:
+If you installed via `cargo install`, you can set up a user-space daemon (note that monitoring some interfaces may still require root privileges):
 
 ```bash
 just setup-user-service
