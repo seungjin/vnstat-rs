@@ -272,7 +272,7 @@ async fn main() -> Result<()> {
     }
 
     if cli.version {
-        println!("vnStat-rs {} by Seungjin Kim", env!("CARGO_PKG_VERSION"));
+        println!("vnStat-rs {} ({}) by Seungjin Kim", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
         return Ok(());
     }
 

@@ -10,7 +10,7 @@ use std::fs;
 use vnstat_rs::{Db, IpcRequest, IpcResponse};
 
 #[derive(Parser)]
-#[command(author, version, about = "A Rust port of vnStat daemon", long_about = None)]
+#[command(author, version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), ")"), about = "A Rust port of vnStat daemon", long_about = None)]
 struct Cli {
     /// Start as daemon
     #[arg(short, long)]
