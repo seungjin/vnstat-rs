@@ -277,7 +277,8 @@ async fn main() -> Result<()> {
     }
 
     if cli.iflist {
-        let stats = vnstat_rs::parse_net_dev()?;
+        let mut stats = vnstat_rs::parse_net_dev()?;
+        stats.retain(|s| s.rx_bytes + s.tx_bytes > 0);
         println!("{:<15} {:<15} {:<15}", "Interface", "RX Total", "TX Total");
         for s in stats {
             println!("{:<15} {:<15} {:<15}", s.name, vnstat_rs::format_bytes(s.rx_bytes), vnstat_rs::format_bytes(s.tx_bytes));
@@ -380,7 +381,8 @@ async fn main() -> Result<()> {
 
             if let Some(req) = req {
                 match request_daemon(socket_path, req).await {
-                    Ok(IpcResponse::Stats(stats)) => {
+                    Ok(IpcResponse::Stats(mut stats)) => {
+                        stats.retain(|s| s.rx_bytes + s.tx_bytes > 0);
                         match format {
                             OutputFormat::Json => println!("{}", serde_json::to_string(&vnstat_rs::VnStatJson::new(stats))?),
                             OutputFormat::Xml => println!("{}", vnstat_rs::VnStatJson::new(stats).to_xml()),
@@ -393,11 +395,16 @@ async fn main() -> Result<()> {
                         }
                         return Ok(());
                     }
-                    Ok(IpcResponse::Summary(summaries)) => {
+                    Ok(IpcResponse::Summary(mut summaries)) => {
+                        summaries.retain(|s| {
+                            s.today.0 + s.today.1 + s.yesterday.0 + s.yesterday.1 + 
+                            s.this_month.0 + s.this_month.1 + s.last_month.0 + s.last_month.1 > 0
+                        });
                         print_summary_table(summaries, current_machine_id.as_deref().unwrap_or(""));
                         return Ok(());
                     }
-                    Ok(IpcResponse::History(history)) => {
+                    Ok(IpcResponse::History(mut history)) => {
+                        history.retain(|h| h.rx + h.tx > 0);
                         match format {
                             OutputFormat::Json => println!("{}", serde_json::to_string(&vnstat_rs::VnStatJson::from_history(history, &requested_table))?),
                             OutputFormat::Xml => println!("{}", vnstat_rs::VnStatJson::from_history(history, &requested_table).to_xml()),
@@ -519,7 +526,8 @@ async fn main() -> Result<()> {
         let begin = cli.begin.as_deref().and_then(parse_date_arg);
         let end = cli.end.as_deref().and_then(parse_date_arg);
 
-        let history = db.get_history(table, cli.iface.as_deref(), final_host_filter, limit, begin, end).await?;
+        let mut history = db.get_history(table, cli.iface.as_deref(), final_host_filter, limit, begin, end).await?;
+        history.retain(|h| h.rx + h.tx > 0);
         
         match format {
             OutputFormat::Json => println!("{}", serde_json::to_string(&vnstat_rs::VnStatJson::from_history(history, table))?),
@@ -537,7 +545,8 @@ async fn main() -> Result<()> {
     }
 
     if !matches!(format, OutputFormat::Table) {
-        let stats = db.get_all_interface_stats(cli.iface.as_deref(), final_host_filter).await?;
+        let mut stats = db.get_all_interface_stats(cli.iface.as_deref(), final_host_filter).await?;
+        stats.retain(|s| s.rx_bytes + s.tx_bytes > 0);
         match format {
             OutputFormat::Json => println!("{}", serde_json::to_string(&vnstat_rs::VnStatJson::new(stats))?),
             OutputFormat::Xml => println!("{}", vnstat_rs::VnStatJson::new(stats).to_xml()),
@@ -552,7 +561,11 @@ async fn main() -> Result<()> {
     }
 
     // Default Table view (vnstat summary)
-    let summaries = db.get_summary(cli.iface.as_deref(), final_host_filter).await?;
+    let mut summaries = db.get_summary(cli.iface.as_deref(), final_host_filter).await?;
+    summaries.retain(|s| {
+        s.today.0 + s.today.1 + s.yesterday.0 + s.yesterday.1 + 
+        s.this_month.0 + s.this_month.1 + s.last_month.0 + s.last_month.1 > 0
+    });
     print_summary_table(summaries, &db.machine_id);
 
     Ok(())
