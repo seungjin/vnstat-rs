@@ -191,89 +191,111 @@ impl Db {
     }
 
     pub async fn get_all_interface_stats(&self, filter_iface: Option<&str>, filter_host: Option<&str>) -> Result<Vec<InterfaceStats>> {
-        let conn = if filter_host.is_some() && filter_host != Some(&self.machine_id) {
+        let conn = if filter_host.is_none() || filter_host != Some(&self.machine_id) {
              self.remote_conn.as_ref().unwrap_or(&self.local_conn)
         } else {
              &self.local_conn
         };
 
-        let mut query_str = "SELECT i.name, i.alias, i.mac_address, i.rxtotal, i.txtotal, h.hostname, i.created, i.updated 
-                         FROM interface i 
-                         JOIN host h ON i.host_id = h.id WHERE i.name != 'lo' AND i.active = 1 ".to_string();
-        
+        let mut ifaces_query = "SELECT i.id, i.name, i.alias, i.mac_address, i.rxtotal, i.txtotal, h.hostname, i.created, i.updated, h.machine_id
+                          FROM interface i
+                          JOIN host h ON i.host_id = h.id WHERE i.name != 'lo' ".to_string();
+
         if let Some(iface) = filter_iface {
-            query_str.push_str(&format!(" AND i.name = '{}' ", iface));
+            ifaces_query.push_str(&format!(" AND i.name = '{}' ", iface));
         }
 
         if let Some(host) = filter_host {
-            query_str.push_str(&format!(" AND (h.hostname = '{}' OR h.machine_id = '{}') ", host, host));
+            ifaces_query.push_str(&format!(" AND (h.hostname = '{}' OR h.machine_id = '{}') ", host, host));
         }
-        
-        let mut rows = conn.query(&query_str, params![]).await?;
+
+        let mut rows = conn.query(&ifaces_query, params![]).await?;
         let mut stats = Vec::new();
         while let Some(row) = rows.next().await? {
+            let name: String = row.get(1)?;
+            let alias: Option<String> = row.get(2)?;
+            let mac: Option<String> = row.get(3)?;
+            let rxtotal: u64 = row.get::<i64>(4)? as u64;
+            let txtotal: u64 = row.get::<i64>(5)? as u64;
+            let hostname: String = row.get(6)?;
+            let created: i64 = row.get(7)?;
+            let updated: i64 = row.get(8)?;
+
             stats.push(InterfaceStats {
-                name: row.get(0)?,
-                alias: row.get(1)?,
-                mac_address: row.get(2)?,
-                rx_bytes: row.get::<i64>(3)? as u64,
-                tx_bytes: row.get::<i64>(4)? as u64,
+                name,
+                alias,
+                mac_address: mac,
+                rx_bytes: rxtotal,
+                tx_bytes: txtotal,
                 rx_packets: 0,
                 tx_packets: 0,
-                hostname: row.get(5)?,
-                created: row.get(6)?,
-                updated: row.get(7)?,
+                hostname,
+                created,
+                updated,
             });
         }
         Ok(stats)
     }
-
     pub async fn get_history(&self, table: &str, filter_iface: Option<&str>, filter_host: Option<&str>, limit: usize, begin: Option<i64>, end: Option<i64>) -> Result<Vec<HistoryEntry>> {
-        let conn = if filter_host.is_some() && filter_host != Some(&self.machine_id) {
-             self.remote_conn.as_ref().unwrap_or(&self.local_conn)
+        let conn = if filter_host.is_none() || filter_host != Some(&self.machine_id) {
+            self.remote_conn.as_ref().unwrap_or(&self.local_conn)
         } else {
-             &self.local_conn
+            &self.local_conn
         };
 
-        let mut query_str = format!(
-            "SELECT h.hostname, i.name, t.date, t.rx, t.tx 
-             FROM interface i 
-             JOIN host h ON i.host_id = h.id
-             JOIN {} t ON i.id = t.interface WHERE i.name != 'lo' AND i.active = 1 ", table);
-        
+        let mut ifaces_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE i.name != 'lo'".to_string();
+
         if let Some(iface) = filter_iface {
-            query_str.push_str(&format!("AND i.name = '{}' ", iface));
+            ifaces_query.push_str(&format!(" AND i.name = '{}'", iface));
         }
 
         if let Some(host) = filter_host {
-            query_str.push_str(&format!(" AND (h.hostname = '{}' OR h.machine_id = '{}') ", host, host));
+            ifaces_query.push_str(&format!(" AND (h.hostname = '{}' OR h.machine_id = '{}')", host, host));
         }
 
-        if let Some(b) = begin {
-            query_str.push_str(&format!("AND t.date >= {} ", b));
+        let mut iface_rows = conn.query(&ifaces_query, params![]).await?;
+        let mut interfaces = Vec::new();
+        while let Some(row) = iface_rows.next().await? {
+            interfaces.push((row.get::<String>(0)?, row.get::<String>(1)?, row.get::<String>(2)?, row.get::<String>(3)?));
         }
 
-        if let Some(e) = end {
-            query_str.push_str(&format!("AND t.date <= {} ", e));
-        }
-
-        if table == "top" {
-            query_str.push_str(&format!("ORDER BY (t.rx + t.tx) DESC LIMIT {}", limit));
-        } else {
-            query_str.push_str(&format!("ORDER BY t.date DESC LIMIT {}", limit));
-        }
-
-        let mut rows = conn.query(&query_str, params![]).await?;
         let mut history = Vec::new();
-        while let Some(row) = rows.next().await? {
-            history.push(HistoryEntry {
-                hostname: row.get(0)?,
-                interface: row.get(1)?,
-                date: row.get(2)?,
-                rx: row.get::<i64>(3)? as u64,
-                tx: row.get::<i64>(4)? as u64,
-            });
+        for (id, name, hostname, _mid) in interfaces {
+            let active_conn = conn;
+
+            let mut query_str = format!("SELECT rx, tx, date FROM {} WHERE interface = ? ", table);
+            if let Some(b) = begin {
+                query_str.push_str(&format!("AND date >= {} ", b));
+            }
+            if let Some(e) = end {
+                query_str.push_str(&format!("AND date <= {} ", e));
+            }
+
+            if table == "top" {
+                query_str.push_str(&format!("ORDER BY (rx + tx) DESC LIMIT {}", limit));
+            } else {
+                query_str.push_str(&format!("ORDER BY date DESC LIMIT {}", limit));
+            }
+
+            let mut data_rows = active_conn.query(&query_str, [id]).await?;
+            while let Some(row) = data_rows.next().await? {
+                history.push(HistoryEntry {
+                    hostname: hostname.clone(),
+                    interface: name.clone(),
+                    date: row.get(2)?,
+                    rx: row.get::<i64>(0)? as u64,
+                    tx: row.get::<i64>(1)? as u64,
+                });
+            }
         }
+
+        // Sort overall if needed (for non-top tables, they are already sorted per interface)
+        if table != "top" {
+            history.sort_by(|a, b| b.date.cmp(&a.date));
+        } else {
+            history.sort_by(|a, b| (b.rx + b.tx).cmp(&(a.rx + a.tx)));
+        }
+
         Ok(history)
     }
 
@@ -285,8 +307,8 @@ impl Db {
             &self.local_conn
         };
 
-        let mut ifaces_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE i.name != 'lo' AND i.active = 1".to_string();
-        
+        let mut ifaces_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE i.name != 'lo'".to_string();
+
         if let Some(iface) = filter_iface {
             ifaces_query.push_str(&format!(" AND i.name = '{}'", iface));
         }
@@ -309,7 +331,7 @@ impl Db {
         let yesterday_ts = today_ts - 86400;
         let this_month_start = now.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
         let this_month_ts = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(this_month_start, chrono::Utc).timestamp();
-        
+
         let last_month_date = if now.month() == 1 {
             now.date_naive().with_year(now.year() - 1).unwrap().with_month(12).unwrap().with_day(1).unwrap()
         } else {
@@ -319,8 +341,8 @@ impl Db {
 
         let mut summaries = Vec::new();
 
-        for (id, name, hostname, mid) in interfaces {
-            let active_conn = if mid == self.machine_id { &self.local_conn } else { conn };
+        for (id, name, hostname, _mid) in interfaces {
+            let active_conn = conn;
 
             let mut stats = std::collections::HashMap::new();
             let mut m_rows = active_conn.query("SELECT date, rx, tx FROM month WHERE interface = ? AND date IN (?, ?)", (id.clone(), this_month_ts, last_month_ts)).await?;
@@ -346,14 +368,14 @@ impl Db {
     }
 
     pub async fn get_95th_data(&self, filter_iface: Option<&str>, filter_host: Option<&str>) -> Result<NintyFifthData> {
-        let conn = if filter_host.is_some() && filter_host != Some(&self.machine_id) {
+        let conn = if filter_host.is_none() || filter_host != Some(&self.machine_id) {
              self.remote_conn.as_ref().unwrap_or(&self.local_conn)
         } else {
              &self.local_conn
         };
 
         // Find the specific interface
-        let mut iface_query = "SELECT i.id, i.name, h.hostname FROM interface i JOIN host h ON i.host_id = h.id WHERE i.name != 'lo' AND i.active = 1 ".to_string();
+        let mut iface_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE i.name != 'lo' ".to_string();
         if let Some(iface) = filter_iface {
             iface_query.push_str(&format!(" AND i.name = '{}'", iface));
         }
@@ -363,22 +385,23 @@ impl Db {
         iface_query.push_str(" LIMIT 1");
 
         let mut rows = conn.query(&iface_query, params![]).await?;
-        let (iface_id, name, hostname) = if let Some(row) = rows.next().await? {
-            (row.get::<String>(0)?, row.get::<String>(1)?, row.get::<String>(2)?)
+        let (iface_id, name, hostname, _mid) = if let Some(row) = rows.next().await? {
+            (row.get::<String>(0)?, row.get::<String>(1)?, row.get::<String>(2)?, row.get::<String>(3)?)
         } else {
             return Err(anyhow::anyhow!("Interface not found"));
         };
+
+        let active_conn = conn;
 
         let now = chrono::Utc::now();
         let month_start = now.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
         let begin = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(month_start, chrono::Utc).timestamp();
         let end = now.timestamp();
 
-        let mut data_rows = conn.query(
+        let mut data_rows = active_conn.query(
             "SELECT rx, tx FROM fiveminute WHERE interface = ? AND date >= ? AND date <= ? ORDER BY date ASC",
             (iface_id, begin, end)
         ).await?;
-
         let mut rx = Vec::new();
         let mut tx = Vec::new();
         while let Some(row) = data_rows.next().await? {

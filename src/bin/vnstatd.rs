@@ -153,7 +153,7 @@ async fn main() -> Result<()> {
                 Ok((mut stream, _)) => {
                     let db = Arc::clone(&db_ipc);
                     tokio::spawn(async move {
-                        let mut buffer = [0; 1024];
+                        let mut buffer = [0; 65536];
                         match stream.read(&mut buffer).await {
                             Ok(n) if n > 0 => {
                                 let req: Result<IpcRequest, _> = serde_json::from_slice(&buffer[..n]);
