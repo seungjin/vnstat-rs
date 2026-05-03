@@ -4,6 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
+WorkingDirectory=%h/.local/share/vnstat-rs
 ExecStart=%h/.cargo/bin/vnstatd-rs
 Restart=always
 
