@@ -15,7 +15,7 @@ pub enum IpcRequest {
     GetInfo,
     GetConfig { name: String },
     SetConfig { name: String, value: String },
-    ListHosts,
+    ListHosts { host: Option<String> },
     Get95th { interface: Option<String>, host: Option<String> },
 }
 

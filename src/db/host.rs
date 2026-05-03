@@ -1,6 +1,5 @@
 use anyhow::{Result};
 use crate::db::Db;
-use libsql::params;
 
 impl Db {
     pub async fn get_or_create_host(&self) -> Result<String> {
@@ -26,9 +25,19 @@ impl Db {
         Ok(self.machine_id.clone())
     }
 
-    pub async fn get_all_hosts(&self) -> Result<Vec<(String, String, Option<String>, Option<i64>)>> {
+    pub async fn get_all_hosts(&self, filter_host: Option<&str>) -> Result<Vec<(String, String, Option<String>, Option<i64>)>> {
         let conn = self.remote_conn.as_ref().unwrap_or(&self.local_conn);
-        let mut rows = conn.query("SELECT hostname, machine_id, version, started FROM host ORDER BY hostname", params![]).await?;
+        let mut sql = "SELECT hostname, machine_id, version, started FROM host".to_string();
+        let mut params = Vec::new();
+
+        if let Some(host) = filter_host {
+            sql.push_str(" WHERE machine_id = ? OR hostname = ?");
+            params.push(host.to_string());
+            params.push(host.to_string());
+        }
+        sql.push_str(" ORDER BY hostname");
+
+        let mut rows = conn.query(&sql, libsql::params_from_iter(params)).await?;
         let mut hosts = Vec::new();
         while let Some(row) = rows.next().await? {
             hosts.push((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?));

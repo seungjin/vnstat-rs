@@ -185,8 +185,8 @@ async fn main() -> Result<()> {
                                             Err(e) => IpcResponse::Error(e.to_string()),
                                         }
                                     }
-                                    Ok(IpcRequest::ListHosts) => {
-                                        match db.get_all_hosts().await {
+                                    Ok(IpcRequest::ListHosts { host }) => {
+                                        match db.get_all_hosts(host.as_deref()).await {
                                             Ok(hosts) => IpcResponse::Hosts(hosts),
                                             Err(e) => IpcResponse::Error(e.to_string()),
                                         }

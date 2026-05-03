@@ -390,7 +390,7 @@ async fn main() -> Result<()> {
             let req = if cli.info {
                 Some(IpcRequest::GetInfo)
             } else if cli.host_list {
-                Some(IpcRequest::ListHosts)
+                Some(IpcRequest::ListHosts { host: host_filter_ipc.clone() })
             } else if cli.nintyfifth {
                 Some(IpcRequest::Get95th { interface: cli.iface.clone(), host: host_filter_ipc.clone() })
             } else if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
@@ -559,7 +559,9 @@ async fn main() -> Result<()> {
     }
 
     if cli.host_list {
-        let hosts = db.get_all_hosts().await?;
+        let current_machine_id = vnstat_rs::get_machine_id().ok();
+        let final_host_filter = if cli.all_hosts { None } else { cli.host.as_deref().or(current_machine_id.as_deref()) };
+        let hosts = db.get_all_hosts(final_host_filter).await?;
         println!("{:<30} {:<30} {:<25} {:<40}", "Hostname", "Version", "Started", "Machine ID");
         println!("{:-<125}", "");
         for (name, id, ver, started) in hosts {
