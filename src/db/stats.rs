@@ -4,7 +4,7 @@ use crate::models::{InterfaceStats, HistoryEntry, SummaryData, NintyFifthData};
 use crate::utils::{parse_net_dev};
 use crate::db::Db;
 use libsql::params;
-use chrono::{Datelike, Local, TimeZone, Timelike};
+use chrono::{Datelike, Local, TimeZone, Utc};
 
 impl Db {
     pub async fn add_traffic(&self, interface_id: &str, table: &str, date: i64, rx: u64, tx: u64) -> Result<()> {
@@ -24,25 +24,24 @@ impl Db {
 
     pub async fn add_history_entry(&self, id: &str, rx_delta: u64, tx_delta: u64) -> Result<()> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-        let dt_local = Local::now();
+        let dt_utc = Utc::now();
 
         let five_min = (now / 300) * 300;
         self.add_traffic(id, "fiveminute", five_min, rx_delta, tx_delta).await?;
 
-        let hour_dt = dt_local.date_naive().and_hms_opt(dt_local.hour(), 0, 0).unwrap();
-        let hour = Local.from_local_datetime(&hour_dt).unwrap().timestamp();
+        let hour = (now / 3600) * 3600;
         self.add_traffic(id, "hour", hour, rx_delta, tx_delta).await?;
 
-        let day_dt = dt_local.date_naive().and_hms_opt(0, 0, 0).unwrap();
-        let day = Local.from_local_datetime(&day_dt).unwrap().timestamp();
+        let day_dt = dt_utc.date_naive().and_hms_opt(0, 0, 0).unwrap();
+        let day = Utc.from_local_datetime(&day_dt).unwrap().timestamp();
         self.add_traffic(id, "day", day, rx_delta, tx_delta).await?;
 
-        let month_dt = dt_local.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-        let month = Local.from_local_datetime(&month_dt).unwrap().timestamp();
+        let month_dt = dt_utc.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let month = Utc.from_local_datetime(&month_dt).unwrap().timestamp();
         self.add_traffic(id, "month", month, rx_delta, tx_delta).await?;
 
-        let year_dt = dt_local.date_naive().with_day(1).unwrap().with_month(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-        let year = Local.from_local_datetime(&year_dt).unwrap().timestamp();
+        let year_dt = dt_utc.date_naive().with_day(1).unwrap().with_month(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let year = Utc.from_local_datetime(&year_dt).unwrap().timestamp();
         self.add_traffic(id, "year", year, rx_delta, tx_delta).await?;
 
         self.add_traffic(id, "top", day, rx_delta, tx_delta).await?;
@@ -342,45 +341,80 @@ impl Db {
 
         let now_local = Local::now();
         let today_start = now_local.date_naive().and_hms_opt(0, 0, 0).unwrap();
-        let today_ts = Local.from_local_datetime(&today_start).unwrap().timestamp();
+        let today_ts_local = Local.from_local_datetime(&today_start).unwrap().timestamp();
         
         let yesterday_date = now_local.date_naive().pred_opt().unwrap();
         let yesterday_start = yesterday_date.and_hms_opt(0, 0, 0).unwrap();
-        let yesterday_ts = Local.from_local_datetime(&yesterday_start).unwrap().timestamp();
+        let yesterday_ts_local = Local.from_local_datetime(&yesterday_start).unwrap().timestamp();
 
         let this_month_start = now_local.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-        let this_month_ts = Local.from_local_datetime(&this_month_start).unwrap().timestamp();
+        let this_month_ts_local = Local.from_local_datetime(&this_month_start).unwrap().timestamp();
 
         let last_month_date = if now_local.month() == 1 {
             now_local.date_naive().with_year(now_local.year() - 1).unwrap().with_month(12).unwrap().with_day(1).unwrap()
         } else {
             now_local.date_naive().with_month(now_local.month() - 1).unwrap().with_day(1).unwrap()
         };
-        let last_month_ts = Local.from_local_datetime(&last_month_date.and_hms_opt(0, 0, 0).unwrap()).unwrap().timestamp();
+        let last_month_ts_local = Local.from_local_datetime(&last_month_date.and_hms_opt(0, 0, 0).unwrap()).unwrap().timestamp();
 
         let mut summaries = Vec::new();
 
         for (id, name, hostname, _mid) in interfaces {
             let active_conn = conn;
 
-            let mut stats = std::collections::HashMap::new();
-            let mut m_rows = active_conn.query("SELECT date, rx, tx FROM month WHERE interface = ? AND date IN (?, ?)", (id.clone(), this_month_ts, last_month_ts)).await?;
-            while let Some(row) = m_rows.next().await? {
-                stats.insert(format!("m_{}", row.get::<i64>(0)?), (row.get::<i64>(1)? as u64, row.get::<i64>(2)? as u64));
+            // To show accurate Local Analysis for UTC data, we need to query fine-grained buckets
+            // and sum them according to local boundaries.
+            
+            // 1. Get Today/Yesterday stats from 'hour' table (UTC) and sum for Local Today/Yesterday
+            let mut h_rows = active_conn.query("SELECT date, rx, tx FROM hour WHERE interface = ? AND date >= ?", (id.clone(), yesterday_ts_local - 3600)).await?;
+            let mut today_rx = 0; let mut today_tx = 0;
+            let mut yest_rx = 0; let mut yest_tx = 0;
+            
+            while let Some(row) = h_rows.next().await? {
+                let date_utc: i64 = row.get(0)?;
+                let rx: u64 = row.get::<i64>(1)? as u64;
+                let tx: u64 = row.get::<i64>(2)? as u64;
+                
+                // Convert UTC bucket to Local to see where it falls
+                let dt_local = Local.from_utc_datetime(&chrono::DateTime::from_timestamp(date_utc, 0).unwrap().naive_utc());
+                let local_start_of_day = dt_local.date_naive().and_hms_opt(0, 0, 0).unwrap();
+                let local_day_ts = Local.from_local_datetime(&local_start_of_day).unwrap().timestamp();
+                
+                if local_day_ts == today_ts_local {
+                    today_rx += rx; today_tx += tx;
+                } else if local_day_ts == yesterday_ts_local {
+                    yest_rx += rx; yest_tx += tx;
+                }
             }
-
-            let mut d_rows = active_conn.query("SELECT date, rx, tx FROM day WHERE interface = ? AND date IN (?, ?)", (id, today_ts, yesterday_ts)).await?;
+            
+            // 2. Get This Month / Last Month stats from 'day' table (UTC) and sum for Local Month
+            let mut d_rows = active_conn.query("SELECT date, rx, tx FROM day WHERE interface = ? AND date >= ?", (id.clone(), last_month_ts_local - 86400)).await?;
+            let mut this_m_rx = 0; let mut this_m_tx = 0;
+            let mut last_m_rx = 0; let mut last_m_tx = 0;
+            
             while let Some(row) = d_rows.next().await? {
-                stats.insert(format!("d_{}", row.get::<i64>(0)?), (row.get::<i64>(1)? as u64, row.get::<i64>(2)? as u64));
+                let date_utc: i64 = row.get(0)?;
+                let rx: u64 = row.get::<i64>(1)? as u64;
+                let tx: u64 = row.get::<i64>(2)? as u64;
+                
+                let dt_local = Local.from_utc_datetime(&chrono::DateTime::from_timestamp(date_utc, 0).unwrap().naive_utc());
+                let local_start_of_month = dt_local.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+                let local_month_ts = Local.from_local_datetime(&local_start_of_month).unwrap().timestamp();
+                
+                if local_month_ts == this_month_ts_local {
+                    this_m_rx += rx; this_m_tx += tx;
+                } else if local_month_ts == last_month_ts_local {
+                    last_m_rx += rx; last_m_tx += tx;
+                }
             }
 
             summaries.push(SummaryData {
                 name,
                 hostname,
-                today: stats.get(&format!("d_{}", today_ts)).cloned().unwrap_or((0, 0)),
-                yesterday: stats.get(&format!("d_{}", yesterday_ts)).cloned().unwrap_or((0, 0)),
-                this_month: stats.get(&format!("m_{}", this_month_ts)).cloned().unwrap_or((0, 0)),
-                last_month: stats.get(&format!("m_{}", last_month_ts)).cloned().unwrap_or((0, 0)),
+                today: (today_rx, today_tx),
+                yesterday: (yest_rx, yest_tx),
+                this_month: (this_m_rx, this_m_tx),
+                last_month: (last_m_rx, last_m_tx),
             });
         }
         Ok(summaries)

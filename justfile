@@ -94,8 +94,12 @@ myservers:
     rsync -avhz -e "ssh -q" target/release/{vnstatd-rs,vnstat-rs} freeshell.de:~/.local/bin/
     ssh freeshell.de "systemctl --user stop vnstatd-rs.service && systemctl --user start vnstatd-rs.service"
 
-    # rsync -avhz target/release/{vnstatd-rs,vnstat-rs} 3.o:~/.local/bin/
+    rsync -avhz target/release/{vnstatd-rs,vnstat-rs} 3.o:~/.local/bin/
     # ssh 3.0 "systemctl --user stop vnstatd-rs.service && systemctl --user start vnstatd-rs.service"
 
-    # rsync -avhz target/release/{vnstatd-rs,vnstat-rs} 2.o.c:~/.local/bin/
+    rsync -avhz target/release/{vnstatd-rs,vnstat-rs} 2.o:~/.local/bin/
     # ssh 2.0 "systemctl --user stop vnstatd-rs.service && systemctl --user start vnstatd-rs.service"
+
+    rsync -avhz target/aarch64-unknown-linux-gnu/release/{vnstatd-rs,vnstat-rs} 1.o:~/.local/bin/
+
+    rsync -avhz target/aarch64-unknown-linux-gnu/release/{vnstatd-rs,vnstat-rs} 0.o:~/.local/bin/
