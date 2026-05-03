@@ -394,8 +394,8 @@ async fn main() -> Result<()> {
             } else if cli.nintyfifth {
                 Some(IpcRequest::Get95th { interface: cli.iface.clone(), host: host_filter_ipc.clone() })
             } else if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
-                let (table, limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(30)) }
-                    else if let Some(l) = cli.hours { ("hour", l.unwrap_or(30)) }
+                let (table, limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(288)) }
+                    else if let Some(l) = cli.hours { ("hour", l.unwrap_or(24)) }
                     else if let Some(l) = cli.days { ("day", l.unwrap_or(30)) }
                     else if let Some(l) = cli.months { ("month", l.unwrap_or(12)) }
                     else if let Some(l) = cli.years { ("year", l.unwrap_or(10)) }
@@ -582,8 +582,8 @@ async fn main() -> Result<()> {
     }
 
     if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
-        let (table, limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(30)) }
-            else if let Some(l) = cli.hours { ("hour", l.unwrap_or(30)) }
+        let (table, limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(288)) }
+            else if let Some(l) = cli.hours { ("hour", l.unwrap_or(24)) }
             else if let Some(l) = cli.days { ("day", l.unwrap_or(30)) }
             else if let Some(l) = cli.months { ("month", l.unwrap_or(12)) }
             else if let Some(l) = cli.years { ("year", l.unwrap_or(10)) }
