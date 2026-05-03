@@ -6,7 +6,7 @@ bump:
     @echo "Bumped version to $(awk -F'\"' '/^version =/ {print $2; exit}' Cargo.toml)"
 
 # Build the project
-build: bump
+build:
     cargo build
 
 # Build all release binaries
