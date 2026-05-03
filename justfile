@@ -12,9 +12,6 @@ build:
 # Build all release binaries
 release: bump build-x86_64 build-aarch64
 
-# Build the project for aarch64 Linux
-release-aarch64: bump build-aarch64
-
 # Inner build recipes (don't call these directly if you want a version bump)
 build-x86_64:
     cargo build --release
