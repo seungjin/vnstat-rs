@@ -33,7 +33,7 @@ pub enum IpcResponse {
         local_schema: i64,
         remote_schema: Option<i64>,
     },
-    Hosts(Vec<(String, String)>),
+    Hosts(Vec<(String, String, Option<String>)>),
     Config(Option<String>),
     Ok,
     Error(String),

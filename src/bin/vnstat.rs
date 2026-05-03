@@ -482,10 +482,10 @@ async fn main() -> Result<()> {
                         return Ok(());
                     }
                     Ok(IpcResponse::Hosts(hosts)) => {
-                        println!("{:<30} {:<40}", "Hostname", "Machine ID");
-                        println!("{:-<70}", "");
-                        for (name, id) in hosts {
-                            println!("{:<30} {:<40}", name, id);
+                        println!("{:<30} {:<30} {:<40}", "Hostname", "Version", "Machine ID");
+                        println!("{:-<100}", "");
+                        for (name, id, ver) in hosts {
+                            println!("{:<30} {:<30} {:<40}", name, ver.unwrap_or_else(|| "unknown".to_string()), id);
                         }
                         return Ok(());
                     }
@@ -555,10 +555,10 @@ async fn main() -> Result<()> {
 
     if cli.host_list {
         let hosts = db.get_all_hosts().await?;
-        println!("{:<30} {:<40}", "Hostname", "Machine ID");
-        println!("{:-<70}", "");
-        for (name, id) in hosts {
-            println!("{:<30} {:<40}", name, id);
+        println!("{:<30} {:<30} {:<40}", "Hostname", "Version", "Machine ID");
+        println!("{:-<100}", "");
+        for (name, id, ver) in hosts {
+            println!("{:<30} {:<30} {:<40}", name, ver.unwrap_or_else(|| "unknown".to_string()), id);
         }
         return Ok(());
     }
