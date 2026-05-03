@@ -15,6 +15,11 @@ impl Db {
         self.local_conn.execute(insert_sql, (self.machine_id.clone(), self.machine_id.clone(), self.hostname.clone(), mac.clone())).await?;
         self.local_conn.execute(update_sql, (self.hostname.clone(), mac.clone(), self.machine_id.clone())).await?;
 
+        // Update info table with version and hostname
+        let version = format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
+        let _ = self.set_info(&format!("vnstatd_version_{}", self.machine_id), &version).await;
+        let _ = self.set_info(&format!("hostname_{}", self.machine_id), &self.hostname).await;
+
         if let Some(ref remote) = self.remote_conn {
             let _ = remote.execute(insert_sql, (self.machine_id.clone(), self.machine_id.clone(), self.hostname.clone(), mac.clone())).await;
             let _ = remote.execute(update_sql, (self.hostname.clone(), mac, self.machine_id.clone())).await;
