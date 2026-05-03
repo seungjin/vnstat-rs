@@ -10,15 +10,17 @@ impl Db {
             .map(|m| m.to_string());
 
         let version = format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
-        let insert_sql = "INSERT OR IGNORE INTO host (id, machine_id, hostname, mac_address, version) VALUES (?, ?, ?, ?, ?)";
-        let update_sql = "UPDATE host SET hostname = ?, mac_address = ?, version = ? WHERE id = ?";
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        
+        let insert_sql = "INSERT OR IGNORE INTO host (id, machine_id, hostname, mac_address, version, started) VALUES (?, ?, ?, ?, ?, ?)";
+        let update_sql = "UPDATE host SET hostname = ?, mac_address = ?, version = ?, started = ? WHERE id = ?";
 
-        self.local_conn.execute(insert_sql, (self.machine_id.clone(), self.machine_id.clone(), self.hostname.clone(), mac.clone(), version.clone())).await?;
-        self.local_conn.execute(update_sql, (self.hostname.clone(), mac.clone(), version.clone(), self.machine_id.clone())).await?;
+        self.local_conn.execute(insert_sql, (self.machine_id.clone(), self.machine_id.clone(), self.hostname.clone(), mac.clone(), version.clone(), now)).await?;
+        self.local_conn.execute(update_sql, (self.hostname.clone(), mac.clone(), version.clone(), now, self.machine_id.clone())).await?;
 
         if let Some(ref remote) = self.remote_conn {
-            let _ = remote.execute(insert_sql, (self.machine_id.clone(), self.machine_id.clone(), self.hostname.clone(), mac.clone(), version.clone())).await;
-            let _ = remote.execute(update_sql, (self.hostname.clone(), mac, version, self.machine_id.clone())).await;
+            let _ = remote.execute(insert_sql, (self.machine_id.clone(), self.machine_id.clone(), self.hostname.clone(), mac.clone(), version.clone(), now)).await;
+            let _ = remote.execute(update_sql, (self.hostname.clone(), mac, version, now, self.machine_id.clone())).await;
         }
 
         Ok(self.machine_id.clone())
