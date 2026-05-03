@@ -149,6 +149,10 @@ By default, the application now automatically switches to user-local paths if no
 
 This allows a normal user to run the daemon and client without any special permissions or `sudo`. You can still override these using the `-c` (config) or `-D` (database) flags.
 
+## Versioning
+
+This project follows a versioning scheme where even minor version numbers indicate stable versions, and odd minor version numbers indicate unstable/development versions.
+
 ## License
 
 This project is licensed under either of
