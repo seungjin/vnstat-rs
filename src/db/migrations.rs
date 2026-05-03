@@ -19,6 +19,20 @@ pub struct MigrationEntry {
 pub const SCHEMA_TOML: &str = include_str!("../../schema.sql.toml");
 
 impl Db {
+    pub async fn is_legacy_db(&self, conn: &libsql::Connection) -> bool {
+        // If 'host' table exists but we have no version info, it's a legacy DB
+        let sql = "SELECT name FROM sqlite_master WHERE type='table' AND name='host'";
+        match conn.query(sql, params![]).await {
+            Ok(mut rows) => {
+                match rows.next().await {
+                    Ok(Some(_)) => true,
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
     pub async fn get_schema_version_from(&self, conn: &libsql::Connection) -> Result<i64> {
         let _ = conn.execute("CREATE TABLE IF NOT EXISTS info (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, value TEXT NOT NULL)", params![]).await;
         
@@ -49,7 +63,11 @@ impl Db {
         self.execute_batch(&schema.sql).await?;
 
         // 2. Handle Local Migrations
-        let current_local = self.get_schema_version_from(&self.local_conn).await?;
+        let mut current_local = self.get_schema_version_from(&self.local_conn).await?;
+        if current_local == 0 && self.is_legacy_db(&self.local_conn).await {
+            current_local = 1; // Force migrations for legacy DB
+        }
+
         if current_local == 0 {
             println!("Initializing fresh local database schema (v{})...", schema.version);
             let _ = self.set_info_local("schema_version", &schema.version.to_string()).await;
@@ -68,7 +86,11 @@ impl Db {
 
         // 3. Handle Remote Migrations (Independent of Local)
         if let Some(ref remote) = self.remote_conn {
-            let current_remote = self.get_schema_version_from(remote).await?;
+            let mut current_remote = self.get_schema_version_from(remote).await?;
+            if current_remote == 0 && self.is_legacy_db(remote).await {
+                current_remote = 1;
+            }
+
             if current_remote == 0 {
                 println!("Initializing fresh remote database schema (v{})...", schema.version);
                 let _ = remote.execute(&format!("INSERT INTO info (name, value) VALUES ('schema_version', '{}') ON CONFLICT(name) DO UPDATE SET value = excluded.value", schema.version), params![]).await;
