@@ -40,9 +40,9 @@ daemon:
     cargo run --bin vnstatd-rs
 
 # Install the binaries to /usr/local/bin
-install: release
-    sudo cp target/release/vnstat-rs /usr/local/bin/
-    sudo cp target/release/vnstatd-rs /usr/local/bin/
+install:
+    cp target/release/vnstat-rs ~/.cargo/bin/
+    cp target/release/vnstatd-rs ~/.cargo/bin/
 
 # Install the binaries to ~/.cargo/bin
 install-user:
