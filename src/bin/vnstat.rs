@@ -299,13 +299,13 @@ async fn main() -> Result<()> {
         if !daemon_connected {
             println!("vnstatd-rs: not running");
             
-            // Try to open DB directly to get schema versions
+            // Try to open DB directly to get schema versions (no init to avoid side effects)
             let db_path = cli.dbdir.clone()
                 .or(file_config.database.clone())
                 .unwrap_or_else(|| PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
             
             if db_path.exists() {
-                if let Ok(db) = Db::open(db_path, file_config.url.clone(), file_config.token.clone(), None).await {
+                if let Ok(db) = Db::open_no_init(db_path, file_config.url.clone(), file_config.token.clone()).await {
                     let local_schema = db.get_schema_version_from(&db.local_conn).await.unwrap_or(0);
                     println!("Local DB Schema: v{}", local_schema);
                     if let Some(ref remote) = db.remote_conn {

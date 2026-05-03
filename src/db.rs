@@ -18,11 +18,10 @@ pub struct Db {
 }
 
 impl Db {
-    pub async fn open(path: PathBuf, url: Option<String>, token: Option<String>, hostname_override: Option<String>) -> Result<Self> {
+    pub async fn connect(path: PathBuf, url: Option<String>, token: Option<String>, hostname_override: Option<String>) -> Result<Self> {
         // 1. Always open local database
         if let Some(parent) = path.parent() {
             if !parent.exists() {
-                println!("Creating database directory {}...", parent.display());
                 fs::create_dir_all(parent).context("Failed to create database directory")?;
             }
         }
@@ -32,7 +31,6 @@ impl Db {
 
         // 2. Optionally open remote database
         let remote_conn = if let (Some(url), Some(token)) = (url, token) {
-            println!("Connecting to remote database at {}...", url);
             match Builder::new_remote(url, token).build().await {
                 Ok(remote_db) => match remote_db.connect() {
                     Ok(conn) => Some(conn),
@@ -55,18 +53,27 @@ impl Db {
         });
         let machine_id = get_machine_id()?;
 
-        let mut db_obj = Self { 
+        Ok(Self { 
             local_conn, 
             remote_conn, 
             hostname, 
             machine_id, 
             host_id: String::new() 
-        };
+        })
+    }
 
+    pub async fn open(path: PathBuf, url: Option<String>, token: Option<String>, hostname_override: Option<String>) -> Result<Self> {
+        if let (Some(u), _) = (&url, &token) {
+            println!("Connecting to remote database at {}...", u);
+        }
+        let mut db_obj = Self::connect(path, url, token, hostname_override).await?;
         db_obj.init_schema().await?;
         db_obj.host_id = db_obj.get_or_create_host().await?;
-
         Ok(db_obj)
+    }
+
+    pub async fn open_no_init(path: PathBuf, url: Option<String>, token: Option<String>) -> Result<Self> {
+        Self::connect(path, url, token, None).await
     }
 
     pub async fn sync(&self) -> Result<()> {
