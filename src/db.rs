@@ -84,7 +84,9 @@ impl Db {
     pub async fn execute_batch(&self, sql: &str) -> Result<()> {
         self.local_conn.execute_batch(sql).await?;
         if let Some(ref remote) = self.remote_conn {
-            let _ = remote.execute_batch(sql).await;
+            if let Err(e) = remote.execute_batch(sql).await {
+                eprintln!("Warning: Failed to execute batch on remote database: {}", e);
+            }
         }
         Ok(())
     }

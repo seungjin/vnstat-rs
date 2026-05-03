@@ -65,7 +65,7 @@ impl Db {
         // 2. Handle Local Migrations
         let mut current_local = self.get_schema_version_from(&self.local_conn).await?;
         if current_local == 0 && self.is_legacy_db(&self.local_conn).await {
-            current_local = 1; // Force migrations for legacy DB
+            current_local = 1; 
         }
 
         if current_local == 0 {
@@ -77,11 +77,15 @@ impl Db {
                 for m in migrations {
                     if m.version > current_local && m.version <= schema.version {
                         println!("Applying local migration v{}...", m.version);
-                        let _ = self.local_conn.execute_batch(&m.sql).await;
+                        if let Err(e) = self.local_conn.execute_batch(&m.sql).await {
+                            eprintln!("Warning: Local migration v{} failed: {}", m.version, e);
+                        }
                     }
                 }
             }
             let _ = self.set_info_local("schema_version", &schema.version.to_string()).await;
+        } else {
+            println!("Local database schema is up-to-date (v{}).", current_local);
         }
 
         // 3. Handle Remote Migrations (Independent of Local)
@@ -107,6 +111,8 @@ impl Db {
                     }
                 }
                 let _ = remote.execute(&format!("INSERT INTO info (name, value) VALUES ('schema_version', '{}') ON CONFLICT(name) DO UPDATE SET value = excluded.value", schema.version), params![]).await;
+            } else {
+                println!("Remote database schema is up-to-date (v{}).", current_remote);
             }
         }
 

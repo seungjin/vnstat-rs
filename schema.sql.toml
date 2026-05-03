@@ -1,4 +1,4 @@
-version = 2026042903
+version = 2026050302
 
 # Full schema for fresh installs (includes all latest columns)
 sql = """
