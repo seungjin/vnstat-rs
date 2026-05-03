@@ -275,7 +275,7 @@ async fn main() -> Result<()> {
     if cli.version {
         println!("vnStat-rs {} ({}) by Seungjin Kim", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
         
-        // Load config to find socket
+        // Load config to find socket and DB
         let is_root = unsafe { libc::getuid() == 0 };
         let etc_config = PathBuf::from("/etc/vnstat-rs.conf");
         let home = std::env::var("HOME").unwrap_or_default();
@@ -293,10 +293,37 @@ async fn main() -> Result<()> {
             })
         };
 
+        // 1. Try daemon first
+        let mut daemon_connected = false;
         if let Some(ref socket_path) = file_config.daemon_socket {
             if socket_path.exists() {
-                if let Ok(IpcResponse::Info { version, .. }) = request_daemon(socket_path, IpcRequest::GetInfo).await {
+                if let Ok(IpcResponse::Info { version, local_schema, remote_schema, .. }) = request_daemon(socket_path, IpcRequest::GetInfo).await {
                     println!("vnstatd-rs version: {}", version);
+                    println!("Local DB Schema: v{}", local_schema);
+                    if let Some(v) = remote_schema {
+                        println!("Remote DB Schema: v{}", v);
+                    }
+                    daemon_connected = true;
+                }
+            }
+        }
+
+        if !daemon_connected {
+            println!("vnstatd-rs: not running");
+            
+            // Try to open DB directly to get schema versions
+            let db_path = cli.dbdir.clone()
+                .or(file_config.database.clone())
+                .unwrap_or_else(|| PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
+            
+            if db_path.exists() {
+                if let Ok(db) = Db::open(db_path, file_config.url.clone(), file_config.token.clone(), None).await {
+                    let local_schema = db.get_schema_version_from(&db.local_conn).await.unwrap_or(0);
+                    println!("Local DB Schema: v{}", local_schema);
+                    if let Some(ref remote) = db.remote_conn {
+                        let remote_schema = db.get_schema_version_from(remote).await.unwrap_or(0);
+                        println!("Remote DB Schema: v{}", remote_schema);
+                    }
                 }
             }
         }
@@ -450,10 +477,14 @@ async fn main() -> Result<()> {
                         print_95th_table(data, file_config.five_minute_hours);
                         return Ok(());
                     }
-                    Ok(IpcResponse::Info { hostname, machine_id, mac_address, version }) => {
+                    Ok(IpcResponse::Info { hostname, machine_id, mac_address, version, local_schema, remote_schema }) => {
                         println!("vnStat-rs {} by Seungjin Kim", env!("CARGO_PKG_VERSION"));
                         println!("Daemon Host: {} ({})", hostname, machine_id);
                         println!("Daemon Version: {}", version);
+                        println!("Local DB Schema: v{}", local_schema);
+                        if let Some(v) = remote_schema {
+                            println!("Remote DB Schema: v{}", v);
+                        }
                         if let Some(mac) = mac_address {
                             println!("MAC Address: {}", mac);
                         }
@@ -519,6 +550,12 @@ async fn main() -> Result<()> {
     if cli.info {
         println!("vnStat-rs {} ({}) by Seungjin Kim", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
         println!("Hostname: {}, Machine ID: {}", db.hostname, db.machine_id);
+        let local_schema = db.get_schema_version_from(&db.local_conn).await.unwrap_or(0);
+        println!("Local DB Schema: v{}", local_schema);
+        if let Some(ref remote) = db.remote_conn {
+            let remote_schema = db.get_schema_version_from(remote).await.unwrap_or(0);
+            println!("Remote DB Schema: v{}", remote_schema);
+        }
         if let Ok(Some(mac)) = db.get_info("mac_address").await {
             println!("MAC Address: {}", mac);
         }

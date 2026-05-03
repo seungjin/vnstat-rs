@@ -179,11 +179,19 @@ async fn main() -> Result<()> {
                                     }
                                     Ok(IpcRequest::GetInfo) => {
                                         let mac = db.get_info("mac_address").await.unwrap_or(None);
+                                        let local_schema = db.get_schema_version_from(&db.local_conn).await.unwrap_or(0);
+                                        let mut remote_schema = None;
+                                        if let Some(ref remote) = db.remote_conn {
+                                            remote_schema = Some(db.get_schema_version_from(remote).await.unwrap_or(0));
+                                        }
+
                                         IpcResponse::Info {
                                             hostname: db.hostname.clone(),
                                             machine_id: db.machine_id.clone(),
                                             mac_address: mac,
                                             version: format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("GIT_HASH")),
+                                            local_schema,
+                                            remote_schema,
                                         }
                                     }
                                     Ok(IpcRequest::GetConfig { name }) => {
