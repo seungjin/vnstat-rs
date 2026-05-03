@@ -26,12 +26,12 @@ impl Db {
         Ok(self.machine_id.clone())
     }
 
-    pub async fn get_all_hosts(&self) -> Result<Vec<(String, String, Option<String>)>> {
+    pub async fn get_all_hosts(&self) -> Result<Vec<(String, String, Option<String>, Option<i64>)>> {
         let conn = self.remote_conn.as_ref().unwrap_or(&self.local_conn);
-        let mut rows = conn.query("SELECT hostname, machine_id, version FROM host ORDER BY hostname", params![]).await?;
+        let mut rows = conn.query("SELECT hostname, machine_id, version, started FROM host ORDER BY hostname", params![]).await?;
         let mut hosts = Vec::new();
         while let Some(row) = rows.next().await? {
-            hosts.push((row.get(0)?, row.get(1)?, row.get(2)?));
+            hosts.push((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?));
         }
         Ok(hosts)
     }

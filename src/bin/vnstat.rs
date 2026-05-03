@@ -482,10 +482,15 @@ async fn main() -> Result<()> {
                         return Ok(());
                     }
                     Ok(IpcResponse::Hosts(hosts)) => {
-                        println!("{:<30} {:<30} {:<40}", "Hostname", "Version", "Machine ID");
-                        println!("{:-<100}", "");
-                        for (name, id, ver) in hosts {
-                            println!("{:<30} {:<30} {:<40}", name, ver.unwrap_or_else(|| "unknown".to_string()), id);
+                        println!("{:<30} {:<30} {:<25} {:<40}", "Hostname", "Version", "Started", "Machine ID");
+                        println!("{:-<125}", "");
+                        for (name, id, ver, started) in hosts {
+                            let started_str = started.map(|ts| {
+                                let dt = chrono::DateTime::from_timestamp(ts, 0).unwrap();
+                                dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string()
+                            }).unwrap_or_else(|| "unknown".to_string());
+                            
+                            println!("{:<30} {:<30} {:<25} {:<40}", name, ver.unwrap_or_else(|| "unknown".to_string()), started_str, id);
                         }
                         return Ok(());
                     }
@@ -555,10 +560,15 @@ async fn main() -> Result<()> {
 
     if cli.host_list {
         let hosts = db.get_all_hosts().await?;
-        println!("{:<30} {:<30} {:<40}", "Hostname", "Version", "Machine ID");
-        println!("{:-<100}", "");
-        for (name, id, ver) in hosts {
-            println!("{:<30} {:<30} {:<40}", name, ver.unwrap_or_else(|| "unknown".to_string()), id);
+        println!("{:<30} {:<30} {:<25} {:<40}", "Hostname", "Version", "Started", "Machine ID");
+        println!("{:-<125}", "");
+        for (name, id, ver, started) in hosts {
+            let started_str = started.map(|ts| {
+                let dt = chrono::DateTime::from_timestamp(ts, 0).unwrap();
+                dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string()
+            }).unwrap_or_else(|| "unknown".to_string());
+            
+            println!("{:<30} {:<30} {:<25} {:<40}", name, ver.unwrap_or_else(|| "unknown".to_string()), started_str, id);
         }
         return Ok(());
     }
