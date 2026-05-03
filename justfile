@@ -1,12 +1,21 @@
 # justfile for vnstat-rs
 
+# Increment patch version
+bump:
+    @perl -i -pe 's/^version = "(\d+)\.(\d+)\.(\d+)"/"version = \"$1.$2." . ($3 + 1) . "\""/e' Cargo.toml
+    @echo "Bumped version to $(awk -F'\"' '/^version =/ {print $2; exit}' Cargo.toml)"
+
 # Build the project
-build:
+build: bump
     cargo build
 
 # Build the project in release mode
-release:
+release: bump
     cargo build --release
+
+# Build the project for aarch64 Linux
+release-aarch64: bump
+    cargo zigbuild --release --target aarch64-unknown-linux-gnu
 
 # Run the project with arguments
 run *args:
@@ -71,3 +80,20 @@ clean:
 # Run tests
 test:
     cargo test
+
+myservers:
+    rsync -avhz target/release/{vnstatd-rs,vnstat-rs} 0.z:~/.local/bin/
+    ssh 0.z "sudo mv ~/.local/bin/{vnstatd-rs,vnstat-rs} /usr/local/bin"
+    ssh 0.z "sudo systemctl stop vnstatd-rs.service && sudo systemctl start vnstatd-rs.service"
+
+    rsync -avhz target/release/{vnstatd-rs,vnstat-rs} 1.c:~/.local/bin/
+    ssh 1.c "systemctl --user stop vnstatd-rs.service && systemctl --user start vnstatd-rs.service"
+
+    rsync -avhz -e "ssh -q" target/release/{vnstatd-rs,vnstat-rs} freeshell.de:~/.local/bin/
+    ssh freeshell.de "systemctl --user stop vnstatd-rs.service && systemctl --user start vnstatd-rs.service"
+
+    # rsync -avhz target/release/{vnstatd-rs,vnstat-rs} 3.o:~/.local/bin/
+    # ssh 3.0 "systemctl --user stop vnstatd-rs.service && systemctl --user start vnstatd-rs.service"
+
+    # rsync -avhz target/release/{vnstatd-rs,vnstat-rs} 2.o.c:~/.local/bin/
+    # ssh 2.0 "systemctl --user stop vnstatd-rs.service && systemctl --user start vnstatd-rs.service"

@@ -3,8 +3,9 @@ Description=vnStatd-rs network traffic monitor (User)
 After=network.target
 
 [Service]
-Type=simple
-ExecStart=%h/.cargo/bin/vnstatd-rs
+Type=forking
+PIDFile=%t/vnstatd-rs.pid
+ExecStart=%h/.cargo/bin/vnstatd-rs -d --pidfile %t/vnstatd-rs.pid
 Restart=always
 
 [Install]

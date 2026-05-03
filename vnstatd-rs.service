@@ -3,11 +3,12 @@ Description=vnStatd-rs network traffic monitor
 After=network.target
 
 [Service]
-Type=simple
+Type=forking
+PIDFile=/var/run/vnstatd-rs.pid
 User=vnstat
 Group=vnstat
-WorkingDirectory=/var/lib/vnstat-rs
-ExecStart=/usr/local/bin/vnstatd-rs
+WorkingDirectory=/var/lib/vnstat-rs 
+ExecStart=/usr/local/bin/vnstatd-rs -d
 Restart=always
 
 [Install]
