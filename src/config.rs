@@ -144,3 +144,30 @@ pub fn get_default_config(is_root: bool) -> Config {
 
     config
 }
+
+pub fn load_best_config() -> Config {
+    let is_root = unsafe { libc::getuid() == 0 };
+    let etc_config = PathBuf::from("/etc/vnstat-rs.conf");
+    let home = std::env::var("HOME").unwrap_or_default();
+    let user_config = PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
+
+    match load_config(&etc_config) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            match load_config(&user_config) {
+                Ok(c) => c,
+                Err(_) => get_default_config(is_root)
+            }
+        }
+        Err(_) => {
+            if !is_root {
+                match load_config(&user_config) {
+                    Ok(c) => c,
+                    Err(_) => get_default_config(is_root)
+                }
+            } else {
+                get_default_config(is_root)
+            }
+        }
+    }
+}

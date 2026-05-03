@@ -58,11 +58,6 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let is_root = unsafe { libc::getuid() == 0 };
-    let etc_config = PathBuf::from("/etc/vnstat-rs.conf");
-    let home = std::env::var("HOME").unwrap_or_default();
-    let user_config = PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
-
     let file_config = if let Some(ref path) = cli.config {
         match vnstat_rs::load_config(path) {
             Ok(c) => c,
@@ -72,26 +67,10 @@ async fn main() -> Result<()> {
             }
         }
     } else {
-        match vnstat_rs::load_config(&etc_config) {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                match vnstat_rs::load_config(&user_config) {
-                    Ok(c) => c,
-                    Err(_) => vnstat_rs::get_default_config(is_root)
-                }
-            }
-            Err(_) => {
-                if !is_root {
-                    match vnstat_rs::load_config(&user_config) {
-                        Ok(c) => c,
-                        Err(_) => vnstat_rs::get_default_config(is_root)
-                    }
-                } else {
-                    vnstat_rs::get_default_config(is_root)
-                }
-            }
-        }
+        vnstat_rs::load_best_config()
     };
+
+    let is_root = unsafe { libc::getuid() == 0 };
 
     let db_path = file_config.database.clone().unwrap_or_else(|| PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
     let url = file_config.url.clone();
