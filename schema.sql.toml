@@ -1,4 +1,4 @@
-version = 2026050302
+version = 2026050303
 
 # Full schema for fresh installs (includes all latest columns)
 sql = """
@@ -99,3 +99,7 @@ sql = "ALTER TABLE host ADD COLUMN mac_address TEXT;"
 [[migrations]]
 version = 2026050302
 sql = "ALTER TABLE host ADD COLUMN started INTEGER;"
+
+[[migrations]]
+version = 2026050303
+sql = "ALTER TABLE host ADD COLUMN version TEXT;"
