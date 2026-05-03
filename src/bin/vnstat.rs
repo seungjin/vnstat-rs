@@ -181,8 +181,8 @@ struct Cli {
     #[arg(short = 'h', long, num_args = 0..=1)]
     hours: Option<Option<usize>>,
 
-    /// Show hours graph (not implemented)
-    #[arg(long = "hoursgraph")]
+    /// Show hours graph
+    #[arg(short = 'g', long = "hoursgraph")]
     hoursgraph: bool,
 
     /// Show daily statistics
@@ -395,6 +395,15 @@ async fn main() -> Result<()> {
                 Some(IpcRequest::GetInfo)
             } else if cli.host_list {
                 Some(IpcRequest::ListHosts { host: cli.host.clone() })
+            } else if cli.hoursgraph {
+                Some(IpcRequest::GetHistory { 
+                    table: "hour".to_string(), 
+                    interface: cli.iface.clone(), 
+                    host: host_filter_ipc.clone(),
+                    limit: 24,
+                    begin: None,
+                    end: None,
+                })
             } else if cli.nintyfifth {
                 Some(IpcRequest::Get95th { interface: cli.iface.clone(), host: host_filter_ipc.clone() })
             } else if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
@@ -464,7 +473,11 @@ async fn main() -> Result<()> {
                                 }
                             }
                             OutputFormat::Table => {
-                                print_history_table(&requested_table, history, requested_limit);
+                                if cli.hoursgraph {
+                                    vnstat_rs::print_hours_graph(history);
+                                } else {
+                                    print_history_table(&requested_table, history, requested_limit);
+                                }
                             }
                         }
                         return Ok(());
@@ -583,6 +596,13 @@ async fn main() -> Result<()> {
     if cli.nintyfifth {
         let data = db.get_95th_data(cli.iface.as_deref(), final_host_filter).await?;
         print_95th_table(data, file_config.five_minute_hours);
+        return Ok(());
+    }
+
+    if cli.hoursgraph {
+        let mut history = db.get_history("hour", cli.iface.as_deref(), final_host_filter, 24, None, None).await?;
+        history.retain(|h| h.rx + h.tx > 0);
+        vnstat_rs::print_hours_graph(history);
         return Ok(());
     }
 

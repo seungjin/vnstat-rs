@@ -1,6 +1,6 @@
 use crate::models::{HistoryEntry, SummaryData, NintyFifthData};
 use crate::utils::format_bytes;
-use chrono::{DateTime, Datelike, Local, TimeZone};
+use chrono::{DateTime, Datelike, Local, TimeZone, Timelike};
 
 pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
     if summaries.is_empty() {
@@ -323,6 +323,120 @@ pub fn print_95th_table(data: NintyFifthData, five_minute_hours: u32) {
     println!("       {:<12} {:>14} | {:>14} | {:>14}", "maximum", format_rate(rx_max), format_rate(tx_max), format_rate(total_max));
     println!("       ----------------------------+----------------+---------------");
     println!("        95th %      {:>14} | {:>14} | {:>14}", format_rate(rx_95), format_rate(tx_95), format_rate(total_95));
+}
+
+pub fn print_hours_graph(history: Vec<HistoryEntry>) {
+    if history.is_empty() {
+        println!("No hourly data available.");
+        return;
+    }
+
+    let interface = history[0].interface.clone();
+    let now = Local::now();
+    let tz_suffix = now.format("%Z").to_string();
+
+    // Map history to the last 24 hours
+    let mut hours_data = vec![(0u64, 0u64); 24];
+    let mut hour_labels = vec![0u32; 24];
+
+    for i in 0..24 {
+        let h_dt = now - chrono::Duration::hours((23 - i) as i64);
+        hour_labels[i] = h_dt.hour();
+        
+        let h_start = h_dt.date_naive().and_hms_opt(h_dt.hour(), 0, 0).unwrap();
+        let h_ts = Local.from_local_datetime(&h_start).unwrap().timestamp();
+        
+        if let Some(entry) = history.iter().find(|e| e.date == h_ts) {
+            hours_data[i] = (entry.rx, entry.tx);
+        }
+    }
+
+    println!("\n {:<70} {:>5}\n", format!(" {} ({})", interface, tz_suffix), now.format("%H:%M"));
+
+    // Find max value for scaling
+    let max_total = hours_data.iter().map(|(r, t)| r + t).max().unwrap_or(0);
+    let scale_max = if max_total == 0 { 1024 * 1024 } else { max_total }; // Default to 1MB scale if no data
+
+    // Draw graph (10 lines high)
+    println!("  ^");
+    for line in (1..=10).rev() {
+        print!("  | ");
+        let threshold = (scale_max as f64 * (line as f64 / 10.0)) as u64;
+        let prev_threshold = (scale_max as f64 * ((line - 1) as f64 / 10.0)) as u64;
+
+        for i in 0..24 {
+            let (rx, tx) = hours_data[i];
+            let total = rx + tx;
+            
+            if total >= threshold {
+                // If this is the 'top' of the bar, decide character
+                // Standard vnstat uses 'r', 't', 's'
+                if rx >= threshold && tx >= threshold {
+                    print!(" s ");
+                } else if tx >= threshold {
+                    print!(" t ");
+                } else {
+                    print!(" r ");
+                }
+            } else if total > prev_threshold {
+                // Partial fill (simplified to 'r' for now)
+                print!(" r ");
+            } else {
+                print!("   ");
+            }
+        }
+        println!();
+    }
+
+    print!(" -+");
+    for _ in 0..24 { print!("---"); }
+    println!(">");
+
+    print!("  | ");
+    for h in &hour_labels {
+        print!(" {:02}", h);
+    }
+    println!("\n");
+
+    // Print summary table (3 columns)
+    println!(" h  rx (MiB)   tx (MiB)  ][  h  rx (MiB)   tx (MiB)  ][  h  rx (MiB)   tx (MiB)");
+    
+    // Helper to format with real commas if possible, or just space it
+    let format_mib = |bytes: u64| -> String {
+        let mib = bytes as f64 / (1024.0 * 1024.0);
+        let s = format!("{:.1}", mib);
+        let parts: Vec<&str> = s.split('.').collect();
+        let int_part = parts[0];
+        let dec_part = parts[1];
+        
+        let mut result = String::new();
+        let mut count = 0;
+        for c in int_part.chars().rev() {
+            if count > 0 && count % 3 == 0 {
+                result.push(',');
+            }
+            result.push(c);
+            count += 1;
+        }
+        format!("{:>10}", format!("{}.{}", result.chars().rev().collect::<String>(), dec_part))
+    };
+
+    for i in 0..8 {
+        let idx1 = i;
+        let idx2 = i + 8;
+        let idx3 = i + 16;
+        
+        let (r1, t1) = hours_data[idx1];
+        let (r2, t2) = hours_data[idx2];
+        let (r3, t3) = hours_data[idx3];
+        
+        println!("{:02} {} {} ][ {:02} {} {} ][ {:02} {} {}", 
+            hour_labels[idx1], format_mib(r1), format_mib(t1),
+            hour_labels[idx2], format_mib(r2), format_mib(t2),
+            hour_labels[idx3], format_mib(r3), format_mib(t3)
+        );
+    }
+    println!();
 }
 
 pub fn format_bytes_short(bytes: u64) -> String {
