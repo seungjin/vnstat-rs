@@ -85,7 +85,7 @@ test:
 
 myservers:
     rsync -avhz target/release/{vnstatd-rs,vnstat-rs} 0.z:~/.local/bin/
-    ssh 0.z "sudo mv ~/.local/bin/{vnstatd-rs,vnstat-rs} /usr/local/bin"
+    ssh 0.z "sudo mv ~/.local/bin/{vnstatd-rs,vnstat-rs} /usr/local/bin && sudo chown root:root /usr/local/bin/{vnstatd-rs,vnstat-rs}"
     ssh 0.z "sudo systemctl stop vnstatd-rs.service && sudo systemctl start vnstatd-rs.service"
 
     rsync -avhz target/release/{vnstatd-rs,vnstat-rs} 1.c:~/.local/bin/
