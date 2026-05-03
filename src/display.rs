@@ -200,7 +200,7 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
                 let total_str = format_bytes_short(total);
 
                 let label_part = match table {
-                    "hour" | "fiveminute" => format!("         {:<10}{:>9} ", dt.format("%H:%M"), rx_str),
+                    "hour" | "fiveminute" => format!("         {:<6}{:>13} ", dt.format("%H:%M"), rx_str),
                     "month" => format!("       {:<7}    {:>10} ", label, rx_str),
                     "day" => format!("      {:<10}  {:>10} ", label, rx_str),
                     "year" => format!("        {:<4}       {:>10} ", label, rx_str),
