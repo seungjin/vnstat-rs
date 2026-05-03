@@ -491,7 +491,7 @@ impl Db {
              &self.local_conn
         };
 
-        // Find the specific interface
+        // Find the specific interface, prioritizing active ones with traffic
         let mut iface_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE i.name != 'lo' ".to_string();
         if let Some(iface) = filter_iface {
             iface_query.push_str(&format!(" AND i.name = '{}'", iface));
@@ -499,7 +499,9 @@ impl Db {
         if let Some(host) = filter_host {
             iface_query.push_str(&format!(" AND (h.hostname = '{}' OR h.machine_id = '{}')", host, host));
         }
-        iface_query.push_str(" LIMIT 1");
+        
+        // Prioritize active interfaces with the most total traffic
+        iface_query.push_str(" ORDER BY i.active DESC, (i.rxtotal + i.txtotal) DESC LIMIT 1");
 
         let mut rows = conn.query(&iface_query, params![]).await?;
         let (iface_id, name, hostname, _mid) = if let Some(row) = rows.next().await? {
