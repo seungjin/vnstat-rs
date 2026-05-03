@@ -98,6 +98,7 @@ async fn main() -> Result<()> {
     let token = file_config.token.clone();
 
     let db = Db::open(db_path, url, token, file_config.hostname_override.clone()).await? ;
+    println!("Reporting version {} to database...", concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), ")"));
 
     if cli.initdb {
         println!("Database initialized for host: {} ({})", db.hostname, db.machine_id);
