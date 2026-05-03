@@ -4,7 +4,7 @@ use crate::models::{InterfaceStats, HistoryEntry, SummaryData, NintyFifthData};
 use crate::utils::{parse_net_dev};
 use crate::db::Db;
 use libsql::params;
-use chrono::{Datelike, Local, TimeZone, Utc};
+use chrono::{Datelike, Local, TimeZone, Utc, Timelike};
 
 impl Db {
     pub async fn add_traffic(&self, interface_id: &str, table: &str, date: i64, rx: u64, tx: u64) -> Result<()> {
@@ -278,7 +278,16 @@ impl Db {
         for (id, name, hostname, _mid) in interfaces {
             let active_conn = conn;
 
-            let mut query_str = format!("SELECT rx, tx, date FROM {} WHERE interface = ? ", table);
+            // Determine if we can aggregate from a smaller unit for better local accuracy
+            let (source_table, group_by_table) = match table {
+                "hour" => ("fiveminute", true),
+                "day" => ("hour", true),
+                "month" => ("day", true),
+                "year" => ("day", true),
+                _ => (table, false), // No aggregation for fiveminute or top
+            };
+
+            let mut query_str = format!("SELECT rx, tx, date FROM {} WHERE interface = ? ", source_table);
             if let Some(b) = begin {
                 query_str.push_str(&format!("AND date >= {} ", b));
             }
@@ -286,21 +295,76 @@ impl Db {
                 query_str.push_str(&format!("AND date <= {} ", e));
             }
 
-            if table == "top" {
+            if group_by_table {
+                 // Fetch a reasonable amount of data to satisfy the limit after grouping
+                 let fetch_limit = match table {
+                     "hour" => limit * 12, // 12 * 5min = 1 hour
+                     "day" => limit * 24,  // 24 * 1 hour = 1 day
+                     "month" => limit * 31,
+                     "year" => limit * 366,
+                     _ => limit,
+                 };
+                 query_str.push_str(&format!("ORDER BY date DESC LIMIT {}", fetch_limit));
+            } else if table == "top" {
                 query_str.push_str(&format!("ORDER BY (rx + tx) DESC LIMIT {}", limit));
             } else {
                 query_str.push_str(&format!("ORDER BY date DESC LIMIT {}", limit));
             }
 
-            let mut data_rows = active_conn.query(&query_str, [id]).await?;
-            while let Some(row) = data_rows.next().await? {
-                history.push(HistoryEntry {
-                    hostname: hostname.clone(),
-                    interface: name.clone(),
-                    date: row.get(2)?,
-                    rx: row.get::<i64>(0)? as u64,
-                    tx: row.get::<i64>(1)? as u64,
-                });
+            let mut data_rows = active_conn.query(&query_str, [id.clone()]).await?;
+            
+            if group_by_table {
+                let mut aggregated: std::collections::BTreeMap<i64, (u64, u64)> = std::collections::BTreeMap::new();
+                while let Some(row) = data_rows.next().await? {
+                    let rx: u64 = row.get::<i64>(0)? as u64;
+                    let tx: u64 = row.get::<i64>(1)? as u64;
+                    let date_utc: i64 = row.get(2)?;
+                    
+                    let dt_local = Local.from_utc_datetime(&chrono::DateTime::from_timestamp(date_utc, 0).unwrap().naive_utc());
+                    let bucket_ts = match table {
+                        "hour" => {
+                            let dt = dt_local.date_naive().and_hms_opt(dt_local.hour(), 0, 0).unwrap();
+                            Local.from_local_datetime(&dt).unwrap().timestamp()
+                        },
+                        "day" => {
+                            let dt = dt_local.date_naive().and_hms_opt(0, 0, 0).unwrap();
+                            Local.from_local_datetime(&dt).unwrap().timestamp()
+                        },
+                        "month" => {
+                            let dt = dt_local.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+                            Local.from_local_datetime(&dt).unwrap().timestamp()
+                        },
+                        "year" => {
+                            let dt = dt_local.date_naive().with_day(1).unwrap().with_month(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+                            Local.from_local_datetime(&dt).unwrap().timestamp()
+                        },
+                        _ => date_utc,
+                    };
+                    
+                    let entry = aggregated.entry(bucket_ts).or_insert((0, 0));
+                    entry.0 += rx;
+                    entry.1 += tx;
+                }
+                
+                for (date, (rx, tx)) in aggregated.into_iter().rev().take(limit) {
+                    history.push(HistoryEntry {
+                        hostname: hostname.clone(),
+                        interface: name.clone(),
+                        date,
+                        rx,
+                        tx,
+                    });
+                }
+            } else {
+                while let Some(row) = data_rows.next().await? {
+                    history.push(HistoryEntry {
+                        hostname: hostname.clone(),
+                        interface: name.clone(),
+                        date: row.get(2)?,
+                        rx: row.get::<i64>(0)? as u64,
+                        tx: row.get::<i64>(1)? as u64,
+                    });
+                }
             }
         }
 
