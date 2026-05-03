@@ -167,7 +167,7 @@ struct Cli {
 
     /// Show statistics for all hosts
     #[arg(long)]
-    host_all: bool,
+    all_hosts: bool,
 
     /// List all hosts in database
     #[arg(long)]
@@ -336,7 +336,7 @@ async fn main() -> Result<()> {
 
     // Use machine_id as the default filter for current host
     let current_machine_id = vnstat_rs::get_machine_id().ok();
-    let host_filter_ipc = if cli.host_all { None } else { cli.host.clone().or_else(|| current_machine_id.clone()) };
+    let host_filter_ipc = if cli.all_hosts { None } else { cli.host.clone().or_else(|| current_machine_id.clone()) };
 
     // Try to talk to daemon first
     if let Some(ref socket_path) = file_config.daemon_socket {
@@ -462,7 +462,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
     
     // Determine if we need a remote connection
-    let (url, token) = if cli.host.is_some() || cli.host_all || cli.update {
+    let (url, token) = if cli.host.is_some() || cli.all_hosts || cli.update {
         (file_config.url.clone(), file_config.token.clone())
     } else {
         (None, None)
@@ -508,7 +508,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let final_host_filter = if cli.host_all { None } else { cli.host.as_deref().or(current_machine_id.as_deref()) };
+    let final_host_filter = if cli.all_hosts { None } else { cli.host.as_deref().or(current_machine_id.as_deref()) };
 
     if cli.nintyfifth {
         let data = db.get_95th_data(cli.iface.as_deref(), final_host_filter).await?;

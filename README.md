@@ -15,7 +15,7 @@ Following the original vnStat architecture, this project provides two binaries:
 - **Unique Identification**: Uses both `machine-id` (from `/etc/machine-id`) and MAC addresses to uniquely identify hosts and interfaces in a distributed environment.
 - **Hardware Tracking**: Automatically discovers and stores MAC addresses for all monitored interfaces.
 - **Flexible Persistence**: Automatically switches to user-local paths (`~/.config` and `~/.local`) if system paths are not accessible.
-- **Multi-host Support**: Aggregate views of all reporting hosts using the `--host-all` flag.
+- **Multi-host Support**: Aggregate views of all reporting hosts using the `--all-hosts` flag.
 - **Human-readable Output**: Displays statistics in KiB, MiB, GiB, etc., with official vnStat-compatible tabular formatting.
 - **CLI Compatibility**: Command-line arguments designed to match the original `vnstat` and `vnstatd`.
 
@@ -56,7 +56,7 @@ vnstat-rs -d
 vnstat-rs -m
 
 # Show statistics for all hosts in the remote database
-vnstat-rs --host-all
+vnstat-rs --all-hosts
 
 # List all known hosts and their machine IDs
 vnstat-rs --host-list

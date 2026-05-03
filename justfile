@@ -61,8 +61,8 @@ restart: release
     @echo "Daemon restarted."
 
 # Show daily stats for all hosts
-host-all:
-    cargo run --bin vnstat-rs -- -d --host-all
+all-hosts:
+    cargo run --bin vnstat-rs -- -d --all-hosts
 
 # Setup systemd service and data directory
 setup-service:

@@ -316,13 +316,12 @@ impl Db {
     }
 
     pub async fn get_summary(&self, filter_iface: Option<&str>, filter_host: Option<&str>) -> Result<Vec<SummaryData>> {
-        // For host-all, we must query remote to get other hosts
+        // For all-hosts, we must query remote to get other hosts
         let conn = if filter_host.is_none() || filter_host != Some(&self.machine_id) {
-            self.remote_conn.as_ref().unwrap_or(&self.local_conn)
+             self.remote_conn.as_ref().unwrap_or(&self.local_conn)
         } else {
-            &self.local_conn
+             &self.local_conn
         };
-
         let mut ifaces_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE i.name != 'lo'".to_string();
 
         if let Some(iface) = filter_iface {
