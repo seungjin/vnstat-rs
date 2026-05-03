@@ -482,15 +482,15 @@ async fn main() -> Result<()> {
                         return Ok(());
                     }
                     Ok(IpcResponse::Hosts(hosts)) => {
-                        println!("{:<30} {:<30} {:<25} {:<40}", "Hostname", "Version", "Started", "Machine ID");
-                        println!("{:-<125}", "");
-                        for (name, id, ver, started) in hosts {
+                        println!("{:<30} {:<30} {:<30}", "Hostname", "Version", "Started");
+                        println!("{:-<90}", "");
+                        for (name, _id, ver, started) in hosts {
                             let started_str = started.map(|ts| {
                                 let dt = chrono::DateTime::from_timestamp(ts, 0).unwrap();
-                                dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string()
+                                dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S %Z").to_string()
                             }).unwrap_or_else(|| "unknown".to_string());
                             
-                            println!("{:<30} {:<30} {:<25} {:<40}", name, ver.unwrap_or_else(|| "unknown".to_string()), started_str, id);
+                            println!("{:<30} {:<30} {:<30}", name, ver.unwrap_or_else(|| "unknown".to_string()), started_str);
                         }
                         return Ok(());
                     }
@@ -562,15 +562,15 @@ async fn main() -> Result<()> {
         let current_machine_id = vnstat_rs::get_machine_id().ok();
         let final_host_filter = if cli.all_hosts { None } else { cli.host.as_deref().or(current_machine_id.as_deref()) };
         let hosts = db.get_all_hosts(final_host_filter).await?;
-        println!("{:<30} {:<30} {:<25} {:<40}", "Hostname", "Version", "Started", "Machine ID");
-        println!("{:-<125}", "");
-        for (name, id, ver, started) in hosts {
+        println!("{:<30} {:<30} {:<30}", "Hostname", "Version", "Started");
+        println!("{:-<90}", "");
+        for (name, _id, ver, started) in hosts {
             let started_str = started.map(|ts| {
                 let dt = chrono::DateTime::from_timestamp(ts, 0).unwrap();
-                dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string()
+                dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S %Z").to_string()
             }).unwrap_or_else(|| "unknown".to_string());
             
-            println!("{:<30} {:<30} {:<25} {:<40}", name, ver.unwrap_or_else(|| "unknown".to_string()), started_str, id);
+            println!("{:<30} {:<30} {:<30}", name, ver.unwrap_or_else(|| "unknown".to_string()), started_str);
         }
         return Ok(());
     }
