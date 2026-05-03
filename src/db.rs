@@ -98,4 +98,10 @@ impl Db {
         }
         Ok(())
     }
+
+    pub async fn set_info_local(&self, name: &str, value: &str) -> Result<()> {
+        let sql = "INSERT INTO info (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value";
+        self.local_conn.execute(sql, [name, value]).await?;
+        Ok(())
+    }
 }
