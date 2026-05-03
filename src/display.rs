@@ -138,7 +138,8 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
             println!("\n {}  /  {}\n", iface, title);
             
             let (label_header, separator_indent) = match table {
-                "fiveminute" | "hour" => ("         time            rx      ", 5),
+                "hour" => ("         hour        rx      ", 5),
+                "fiveminute" => ("         time            rx      ", 5),
                 "day" => ("          day         rx      ", 5),
                 "month" => ("        month        rx      ", 5),
                 "year" => ("          year        rx      ", 5),
@@ -148,10 +149,20 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
             println!("{}|     tx      |    total    |   avg. rate", label_header);
             println!("{:indent$}------------------------+-------------+-------------+---------------", "", indent = separator_indent);
 
+            let mut last_date = String::new();
+
             for entry in entries {
                 let dt = DateTime::from_timestamp(entry.date, 0).unwrap();
+                let date_str = dt.format("%Y-%m-%d").to_string();
+                
+                if table == "hour" && date_str != last_date {
+                    println!("     {}", date_str);
+                    last_date = date_str;
+                }
+
                 let label = match table {
-                    "fiveminute" | "hour" => dt.format("%Y-%m-%d %H:%M").to_string(),
+                    "hour" => dt.format("    %H:00").to_string(),
+                    "fiveminute" => dt.format("%Y-%m-%d %H:%M").to_string(),
                     "day" => dt.format("%Y-%m-%d").to_string(),
                     "month" => dt.format("%Y-%m").to_string(),
                     "year" => dt.format("%Y").to_string(),
@@ -188,14 +199,20 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
                 let total_str = format_bytes_short(total);
 
                 let label_part = match table {
+                    "hour" => format!("         {:<10}{:>9} ", dt.format("%H:00"), rx_str),
                     "month" => format!("       {:<7}    {:>10} ", label, rx_str),
                     "day" => format!("      {:<10}  {:>10} ", label, rx_str),
                     "year" => format!("        {:<4}       {:>10} ", label, rx_str),
                     _ => format!("     {:<16} {:>10} ", label, rx_str),
                 };
 
-                println!("{}|  {:>10} |  {:>10} |    {:>11}", 
-                    label_part, tx_str, total_str, rate_str);
+                if table == "hour" {
+                    println!("{}|  {:>10} |  {:>10} |  {:>13}", 
+                        label_part, tx_str, total_str, rate_str);
+                } else {
+                    println!("{}|  {:>10} |  {:>10} |    {:>11}", 
+                        label_part, tx_str, total_str, rate_str);
+                }
             }
 
             println!("{:indent$}------------------------+-------------+-------------+---------------", "", indent = separator_indent);
