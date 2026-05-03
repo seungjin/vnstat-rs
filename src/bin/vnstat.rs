@@ -249,6 +249,10 @@ struct Cli {
     #[arg(long)]
     iflist: bool,
 
+    /// Set output entry limit
+    #[arg(short = 'L', long, value_name = "limit")]
+    limit: Option<usize>,
+
     /// Path to the database directory/file
     #[arg(short = 'D', long, value_name = "FILE")]
     dbdir: Option<PathBuf>,
@@ -394,7 +398,7 @@ async fn main() -> Result<()> {
             } else if cli.nintyfifth {
                 Some(IpcRequest::Get95th { interface: cli.iface.clone(), host: host_filter_ipc.clone() })
             } else if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
-                let (table, limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(24)) }
+                let (table, default_limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(24)) }
                     else if let Some(l) = cli.hours { ("hour", l.unwrap_or(24)) }
                     else if let Some(l) = cli.days { ("day", l.unwrap_or(30)) }
                     else if let Some(l) = cli.months { ("month", l.unwrap_or(12)) }
@@ -402,6 +406,7 @@ async fn main() -> Result<()> {
                     else { ("top", cli.top.unwrap().unwrap_or(10)) };
                 
                 requested_table = table.to_string();
+                let limit = cli.limit.unwrap_or(default_limit);
                 requested_limit = limit;
                 let begin = cli.begin.as_deref().and_then(parse_date_arg);
                 let end = cli.end.as_deref().and_then(parse_date_arg);
@@ -582,13 +587,14 @@ async fn main() -> Result<()> {
     }
 
     if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
-        let (table, limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(24)) }
+        let (table, default_limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(24)) }
             else if let Some(l) = cli.hours { ("hour", l.unwrap_or(24)) }
             else if let Some(l) = cli.days { ("day", l.unwrap_or(30)) }
             else if let Some(l) = cli.months { ("month", l.unwrap_or(12)) }
             else if let Some(l) = cli.years { ("year", l.unwrap_or(10)) }
             else { ("top", cli.top.unwrap().unwrap_or(10)) };
 
+        let limit = cli.limit.unwrap_or(default_limit);
         let begin = cli.begin.as_deref().and_then(parse_date_arg);
         let end = cli.end.as_deref().and_then(parse_date_arg);
 
