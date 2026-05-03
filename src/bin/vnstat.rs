@@ -286,7 +286,7 @@ async fn main() -> Result<()> {
         if let Some(ref socket_path) = file_config.daemon_socket {
             if socket_path.exists() {
                 if let Ok(IpcResponse::Info { version, local_schema, remote_schema, .. }) = request_daemon(socket_path, IpcRequest::GetInfo).await {
-                    println!("vnstatd-rs version: {}", version);
+                    println!("vnStatd-rs version: {}", version);
                     println!("Local DB Schema: v{}", local_schema);
                     if let Some(v) = remote_schema {
                         println!("Remote DB Schema: v{}", v);
@@ -297,7 +297,7 @@ async fn main() -> Result<()> {
         }
 
         if !daemon_connected {
-            println!("vnstatd-rs: not running");
+            println!("vnStatd-rs: not running");
             
             // Try to open DB directly to get schema versions (no init to avoid side effects)
             let db_path = cli.dbdir.clone()
@@ -521,7 +521,7 @@ async fn main() -> Result<()> {
         Ok(db) => db,
         Err(e) => {
             if e.to_string().contains("locked") {
-                return Err(anyhow::anyhow!("Database is locked by another process (likely vnstatd-rs).\nTry starting the daemon or stopping it if you want direct access."));
+                return Err(anyhow::anyhow!("Database is locked by another process (likely vnStatd-rs).\nTry starting the daemon or stopping it if you want direct access."));
             }
             return Err(e);
         }
