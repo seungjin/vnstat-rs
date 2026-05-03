@@ -9,20 +9,16 @@ impl Db {
             .and_then(|iface| iface.mac)
             .map(|m| m.to_string());
 
-        let insert_sql = "INSERT OR IGNORE INTO host (id, machine_id, hostname, mac_address) VALUES (?, ?, ?, ?)";
-        let update_sql = "UPDATE host SET hostname = ?, mac_address = ? WHERE id = ?";
-
-        self.local_conn.execute(insert_sql, (self.machine_id.clone(), self.machine_id.clone(), self.hostname.clone(), mac.clone())).await?;
-        self.local_conn.execute(update_sql, (self.hostname.clone(), mac.clone(), self.machine_id.clone())).await?;
-
-        // Update info table with version and hostname
         let version = format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
-        let _ = self.set_info(&format!("vnstatd_version_{}", self.machine_id), &version).await;
-        let _ = self.set_info(&format!("hostname_{}", self.machine_id), &self.hostname).await;
+        let insert_sql = "INSERT OR IGNORE INTO host (id, machine_id, hostname, mac_address, version) VALUES (?, ?, ?, ?, ?)";
+        let update_sql = "UPDATE host SET hostname = ?, mac_address = ?, version = ? WHERE id = ?";
+
+        self.local_conn.execute(insert_sql, (self.machine_id.clone(), self.machine_id.clone(), self.hostname.clone(), mac.clone(), version.clone())).await?;
+        self.local_conn.execute(update_sql, (self.hostname.clone(), mac.clone(), version.clone(), self.machine_id.clone())).await?;
 
         if let Some(ref remote) = self.remote_conn {
-            let _ = remote.execute(insert_sql, (self.machine_id.clone(), self.machine_id.clone(), self.hostname.clone(), mac.clone())).await;
-            let _ = remote.execute(update_sql, (self.hostname.clone(), mac, self.machine_id.clone())).await;
+            let _ = remote.execute(insert_sql, (self.machine_id.clone(), self.machine_id.clone(), self.hostname.clone(), mac.clone(), version.clone())).await;
+            let _ = remote.execute(update_sql, (self.hostname.clone(), mac, version, self.machine_id.clone())).await;
         }
 
         Ok(self.machine_id.clone())

@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS host (
     id           TEXT PRIMARY KEY,
     machine_id   TEXT UNIQUE NOT NULL,
     hostname     TEXT NOT NULL,
-    mac_address  TEXT
+    mac_address  TEXT,
+    version      TEXT
 );
 
 -- Interface table
@@ -95,5 +96,5 @@ version = 2026042902
 sql = "ALTER TABLE host ADD COLUMN mac_address TEXT;"
 
 [[migrations]]
-version = 2026042903
-sql = "ALTER TABLE interface ADD COLUMN mac_address TEXT;"
+version = 2026050301
+sql = "ALTER TABLE host ADD COLUMN version TEXT;"
