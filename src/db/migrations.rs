@@ -40,18 +40,14 @@ impl Db {
     pub async fn init_schema(&self) -> Result<()> {
         let schema: Schema = toml::from_str(SCHEMA_TOML)?;
         
-        // Ensure remote also has the schema initialized (non-fatal)
-        if let Some(ref remote) = self.remote_conn {
-             if let Err(e) = remote.execute_batch(&schema.sql).await {
-                 eprintln!("Warning: Failed to initialize schema on remote database: {}", e);
-             }
-        }
+        // 1. Initial table creation (both)
+        self.execute_batch(&schema.sql).await?;
 
+        // 2. Handle migrations
         let current = self.get_schema_version().await?;
 
         if current == 0 {
             println!("Initializing fresh database schema (v{})...", schema.version);
-            self.execute_batch(&schema.sql).await?;
             self.set_info("schema_version", &schema.version.to_string()).await?;
         } else if current < schema.version {
             println!("Migrating database from v{} to v{}...", current, schema.version);
@@ -60,7 +56,10 @@ impl Db {
                 for m in migrations {
                     if m.version > current && m.version <= schema.version {
                         println!("Applying migration v{}...", m.version);
-                        let _ = self.execute_batch(&m.sql).await;
+                        // execute_batch applies to both local and remote
+                        if let Err(e) = self.execute_batch(&m.sql).await {
+                            eprintln!("Warning: Migration v{} failed: {}", m.version, e);
+                        }
                     }
                 }
             }
