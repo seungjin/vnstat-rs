@@ -228,7 +228,7 @@ async fn main() -> Result<()> {
     let mut last_sync = SystemTime::now();
 
     loop {
-        if let Err(e) = db_loop.update_stats(None).await {
+        if let Err(e) = db_loop.update_stats(None, &file_config).await {
             eprintln!("Error updating stats: {}", e);
         }
 

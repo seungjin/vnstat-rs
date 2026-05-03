@@ -4,6 +4,7 @@ use std::path::{PathBuf};
 use tokio::net::UnixStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use vnstat_rs::{Db, IpcRequest, IpcResponse, print_summary_table, print_history_table, print_95th_table, format_rate};
+use chrono::{Local, TimeZone};
 
 async fn request_daemon(socket_path: &PathBuf, req: IpcRequest) -> Result<IpcResponse> {
     let mut stream = UnixStream::connect(socket_path).await?;
@@ -20,11 +21,11 @@ async fn request_daemon(socket_path: &PathBuf, req: IpcRequest) -> Result<IpcRes
 fn parse_date_arg(date_str: &str) -> Option<i64> {
     // Try YYYY-MM-DD
     if let Ok(ndt) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-        return Some(ndt.and_hms_opt(0, 0, 0).unwrap().and_local_timezone(chrono::Utc).unwrap().timestamp());
+        return Some(Local.from_local_datetime(&ndt.and_hms_opt(0, 0, 0).unwrap()).unwrap().timestamp());
     }
     // Try YYYY-MM
     if let Ok(ndt) = chrono::NaiveDate::parse_from_str(&format!("{}-01", date_str), "%Y-%m-%d") {
-        return Some(ndt.and_hms_opt(0, 0, 0).unwrap().and_local_timezone(chrono::Utc).unwrap().timestamp());
+        return Some(Local.from_local_datetime(&ndt.and_hms_opt(0, 0, 0).unwrap()).unwrap().timestamp());
     }
     None
 }
@@ -483,7 +484,7 @@ async fn main() -> Result<()> {
     }
 
     if cli.update {
-        db.update_stats(cli.iface.as_deref()).await?;
+        db.update_stats(cli.iface.as_deref(), &file_config).await?;
         db.prune_stats(&file_config).await?;
         return Ok(());
     }

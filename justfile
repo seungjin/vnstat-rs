@@ -44,6 +44,15 @@ setup-user-service:
     systemctl --user daemon-reload
     @echo "User service installed. Run 'systemctl --user enable --now vnstatd-rs' to start."
 
+# Rebuild and restart the user service
+restart: release
+    systemctl --user restart vnstatd-rs
+    @echo "Daemon restarted."
+
+# Show daily stats for all hosts
+host-all:
+    cargo run --bin vnstat-rs -- -d --host-all
+
 # Setup systemd service and data directory
 setup-service:
     sudo useradd -r -s /sbin/nologin vnstat || true

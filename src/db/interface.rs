@@ -3,12 +3,12 @@ use crate::db::Db;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl Db {
-    pub async fn get_interface(&self, name: &str) -> Result<Option<(String, u64, u64, Option<String>)>> {
+    pub async fn get_interface(&self, name: &str) -> Result<Option<(String, u64, u64, Option<String>, i64)>> {
         if name == "lo" {
             return Ok(None);
         }
         let mut rows = self.local_conn.query(
-            "SELECT id, rxcounter, txcounter, mac_address FROM interface WHERE host_id = ? AND name = ?", 
+            "SELECT id, rxcounter, txcounter, mac_address, updated FROM interface WHERE host_id = ? AND name = ?", 
             [self.host_id.clone(), name.to_string()]
         ).await?;
         
@@ -17,7 +17,8 @@ impl Db {
                 row.get(0)?, 
                 row.get::<i64>(1)? as u64, 
                 row.get::<i64>(2)? as u64,
-                row.get(3)?
+                row.get(3)?,
+                row.get(4)?
             )));
         }
         Ok(None)

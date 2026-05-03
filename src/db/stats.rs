@@ -1,10 +1,10 @@
 use anyhow::{Result};
-use chrono::{Datelike};
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::models::{InterfaceStats, HistoryEntry, SummaryData, NintyFifthData};
 use crate::utils::{parse_net_dev};
 use crate::db::Db;
 use libsql::params;
+use chrono::{Datelike, Local, TimeZone, Timelike};
 
 impl Db {
     pub async fn add_traffic(&self, interface_id: &str, table: &str, date: i64, rx: u64, tx: u64) -> Result<()> {
@@ -24,25 +24,25 @@ impl Db {
 
     pub async fn add_history_entry(&self, id: &str, rx_delta: u64, tx_delta: u64) -> Result<()> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-        let dt = chrono::DateTime::from_timestamp(now, 0).unwrap();
-        let naive = dt.naive_utc();
+        let dt_local = Local::now();
 
         let five_min = (now / 300) * 300;
         self.add_traffic(id, "fiveminute", five_min, rx_delta, tx_delta).await?;
 
-        let hour = (now / 3600) * 3600;
+        let hour_dt = dt_local.date_naive().and_hms_opt(dt_local.hour(), 0, 0).unwrap();
+        let hour = Local.from_local_datetime(&hour_dt).unwrap().timestamp();
         self.add_traffic(id, "hour", hour, rx_delta, tx_delta).await?;
 
-        let day_dt = naive.date().and_hms_opt(0, 0, 0).unwrap();
-        let day = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(day_dt, chrono::Utc).timestamp();
+        let day_dt = dt_local.date_naive().and_hms_opt(0, 0, 0).unwrap();
+        let day = Local.from_local_datetime(&day_dt).unwrap().timestamp();
         self.add_traffic(id, "day", day, rx_delta, tx_delta).await?;
 
-        let month_dt = naive.date().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-        let month = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(month_dt, chrono::Utc).timestamp();
+        let month_dt = dt_local.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let month = Local.from_local_datetime(&month_dt).unwrap().timestamp();
         self.add_traffic(id, "month", month, rx_delta, tx_delta).await?;
 
-        let year_dt = naive.date().with_day(1).unwrap().with_month(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-        let year = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(year_dt, chrono::Utc).timestamp();
+        let year_dt = dt_local.date_naive().with_day(1).unwrap().with_month(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let year = Local.from_local_datetime(&year_dt).unwrap().timestamp();
         self.add_traffic(id, "year", year, rx_delta, tx_delta).await?;
 
         self.add_traffic(id, "top", day, rx_delta, tx_delta).await?;
@@ -127,7 +127,7 @@ impl Db {
         Ok(())
     }
 
-    pub async fn update_stats(&self, filter_iface: Option<&str>) -> Result<()> {
+    pub async fn update_stats(&self, filter_iface: Option<&str>, config: &crate::config::Config) -> Result<()> {
         let stats = parse_net_dev()?;
         let mut seen_ids = std::collections::HashSet::new();
 
@@ -137,7 +137,7 @@ impl Db {
                     continue;
                 }
             }
-            if let Some((id, last_rx, last_tx, current_mac)) = self.get_interface(&stat.name).await? {
+            if let Some((id, last_rx, last_tx, current_mac, updated)) = self.get_interface(&stat.name).await? {
                 seen_ids.insert(id.clone());
                 
                 // Mark as active if it was inactive
@@ -149,16 +149,32 @@ impl Db {
                     }
                 }
 
-                let rx_delta = if stat.rx_bytes >= last_rx {
-                    stat.rx_bytes - last_rx
-                } else {
-                    stat.rx_bytes // reset
+                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+                let time_diff = (now - updated).max(1) as u64;
+                let max_bytes_per_sec = (config.max_bandwidth * 1_000_000) / 8;
+
+                let calculate_delta = |current: u64, last: u64| -> u64 {
+                    if current >= last {
+                        current - last
+                    } else {
+                        // Potential rollover
+                        let roll_32 = (u32::MAX as u64).saturating_sub(last).saturating_add(current).saturating_add(1);
+                        let roll_64 = u64::MAX.saturating_sub(last).saturating_add(current).saturating_add(1);
+
+                        if max_bytes_per_sec == 0 {
+                            current // treat as reset if check is disabled
+                        } else if last <= u32::MAX as u64 && (roll_32 / time_diff) <= max_bytes_per_sec {
+                            roll_32
+                        } else if (roll_64 / time_diff) <= max_bytes_per_sec {
+                            roll_64
+                        } else {
+                            current // treat as reset
+                        }
+                    }
                 };
-                let tx_delta = if stat.tx_bytes >= last_tx {
-                    stat.tx_bytes - last_tx
-                } else {
-                    stat.tx_bytes // reset
-                };
+
+                let rx_delta = calculate_delta(stat.rx_bytes, last_rx);
+                let tx_delta = calculate_delta(stat.tx_bytes, last_tx);
 
                 if rx_delta > 0 || tx_delta > 0 {
                     println!("Updating interface {} (+{} RX, +{} TX)...", stat.name, rx_delta, tx_delta);
@@ -179,7 +195,7 @@ impl Db {
             for iface_stat in all_ifaces {
                 // We need the internal ID to mark inactive. 
                 // Since get_all_interface_stats doesn't return ID, we'll use a new helper or get_interface
-                if let Some((id, _, _, _)) = self.get_interface(&iface_stat.name).await? {
+                if let Some((id, _, _, _, _)) = self.get_interface(&iface_stat.name).await? {
                     if !seen_ids.contains(&id) {
                         let _ = self.set_interface_active(&id, false).await;
                     }
@@ -325,19 +341,23 @@ impl Db {
             interfaces.push((row.get::<String>(0)?, row.get::<String>(1)?, row.get::<String>(2)?, row.get::<String>(3)?));
         }
 
-        let now = chrono::Utc::now();
-        let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
-        let today_ts = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(today_start, chrono::Utc).timestamp();
-        let yesterday_ts = today_ts - 86400;
-        let this_month_start = now.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-        let this_month_ts = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(this_month_start, chrono::Utc).timestamp();
+        let now_local = Local::now();
+        let today_start = now_local.date_naive().and_hms_opt(0, 0, 0).unwrap();
+        let today_ts = Local.from_local_datetime(&today_start).unwrap().timestamp();
+        
+        let yesterday_date = now_local.date_naive().pred_opt().unwrap();
+        let yesterday_start = yesterday_date.and_hms_opt(0, 0, 0).unwrap();
+        let yesterday_ts = Local.from_local_datetime(&yesterday_start).unwrap().timestamp();
 
-        let last_month_date = if now.month() == 1 {
-            now.date_naive().with_year(now.year() - 1).unwrap().with_month(12).unwrap().with_day(1).unwrap()
+        let this_month_start = now_local.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let this_month_ts = Local.from_local_datetime(&this_month_start).unwrap().timestamp();
+
+        let last_month_date = if now_local.month() == 1 {
+            now_local.date_naive().with_year(now_local.year() - 1).unwrap().with_month(12).unwrap().with_day(1).unwrap()
         } else {
-            now.date_naive().with_month(now.month() - 1).unwrap().with_day(1).unwrap()
+            now_local.date_naive().with_month(now_local.month() - 1).unwrap().with_day(1).unwrap()
         };
-        let last_month_ts = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(last_month_date.and_hms_opt(0, 0, 0).unwrap(), chrono::Utc).timestamp();
+        let last_month_ts = Local.from_local_datetime(&last_month_date.and_hms_opt(0, 0, 0).unwrap()).unwrap().timestamp();
 
         let mut summaries = Vec::new();
 
@@ -393,10 +413,10 @@ impl Db {
 
         let active_conn = conn;
 
-        let now = chrono::Utc::now();
-        let month_start = now.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-        let begin = chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(month_start, chrono::Utc).timestamp();
-        let end = now.timestamp();
+        let now_local = Local::now();
+        let month_start = now_local.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let begin = Local.from_local_datetime(&month_start).unwrap().timestamp();
+        let end = now_local.timestamp();
 
         let mut data_rows = active_conn.query(
             "SELECT rx, tx FROM fiveminute WHERE interface = ? AND date >= ? AND date <= ? ORDER BY date ASC",
@@ -485,6 +505,52 @@ mod tests {
 
         if db_path.exists() { let _ = std::fs::remove_file(&db_path); }
         Ok(())
+    }
+
+    #[test]
+    fn test_delta_calculation_logic() {
+        let max_bandwidth = 1000; // 1000 Mbit/s
+        let time_diff = 10; // 10 seconds
+        let max_bytes_per_sec = (max_bandwidth * 1_000_000) / 8;
+
+        let calculate_delta = |current: u64, last: u64| -> u64 {
+            if current >= last {
+                current - last
+            } else {
+                let roll_32 = (u32::MAX as u64).saturating_sub(last).saturating_add(current).saturating_add(1);
+                let roll_64 = u64::MAX.saturating_sub(last).saturating_add(current).saturating_add(1);
+
+                if max_bytes_per_sec == 0 {
+                    current
+                } else if last <= u32::MAX as u64 && (roll_32 / time_diff) <= max_bytes_per_sec {
+                    roll_32
+                } else if (roll_64 / time_diff) <= max_bytes_per_sec {
+                    roll_64
+                } else {
+                    current
+                }
+            }
+        };
+
+        // Normal increase
+        assert_eq!(calculate_delta(1500, 1000), 500);
+
+        // 32-bit rollover (valid)
+        // last = 2^32 - 499, current = 200. Delta = 499 + 200 + 1 = 700.
+        // 700 bytes / 10 sec = 70 bytes/sec. Well within 125MB/s (1000Mbit/s).
+        let last_32 = u32::MAX as u64 - 499;
+        assert_eq!(calculate_delta(200, last_32), 700);
+
+        // 32-bit "rollover" that is actually a reboot (exceeds bandwidth)
+        // last = 2^32 - 499, current = 2GB. 
+        // Delta would be ~2GB + 500. 2GB / 10s = 200MB/s > 125MB/s.
+        // Should treat as reset (delta = 2GB).
+        let current_large = 2_000_000_000;
+        assert_eq!(calculate_delta(current_large, last_32), current_large);
+
+        // 64-bit rollover (extremely unlikely but handled)
+        let last_64 = u64::MAX - 499;
+        assert_eq!(calculate_delta(200, last_64), 700);
     }
 }
 

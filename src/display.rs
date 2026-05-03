@@ -1,6 +1,6 @@
 use crate::models::{HistoryEntry, SummaryData, NintyFifthData};
 use crate::utils::format_bytes;
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Datelike, Local, TimeZone};
 
 pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
     if summaries.is_empty() {
@@ -17,20 +17,20 @@ pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
     let mut hostnames: Vec<_> = by_host.keys().cloned().collect();
     hostnames.sort();
 
-    let now = Utc::now();
+    let now = Local::now();
     let now_ts = now.timestamp();
     let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
-    let today_ts = DateTime::<Utc>::from_naive_utc_and_offset(today_start, Utc).timestamp();
+    let today_ts = Local.from_local_datetime(&today_start).unwrap().timestamp();
 
     let this_month_start = now.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-    let this_month_ts = DateTime::<Utc>::from_naive_utc_and_offset(this_month_start, Utc).timestamp();
+    let this_month_ts = Local.from_local_datetime(&this_month_start).unwrap().timestamp();
     
     let last_month_date = if now.month() == 1 {
         now.date_naive().with_year(now.year() - 1).unwrap().with_month(12).unwrap().with_day(1).unwrap()
     } else {
         now.date_naive().with_month(now.month() - 1).unwrap().with_day(1).unwrap()
     };
-    let last_month_ts = DateTime::<Utc>::from_naive_utc_and_offset(last_month_date.and_hms_opt(0, 0, 0).unwrap(), Utc).timestamp();
+    let last_month_ts = Local.from_local_datetime(&last_month_date.and_hms_opt(0, 0, 0).unwrap()).unwrap().timestamp();
 
     for hostname in hostnames {
         println!();
@@ -109,7 +109,7 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
     let mut hostnames: Vec<_> = by_host_and_interface.keys().cloned().collect();
     hostnames.sort();
 
-    let now = Utc::now();
+    let now = Local::now();
     let now_ts = now.timestamp();
 
     for hostname in hostnames {
@@ -213,12 +213,12 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
                     let (secs_passed, total_secs) = match table {
                         "day" => {
                             let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
-                            let start_ts = DateTime::<Utc>::from_naive_utc_and_offset(today_start, Utc).timestamp();
+                            let start_ts = Local.from_local_datetime(&today_start).unwrap().timestamp();
                             ((now_ts - start_ts).max(1) as f64, 86400.0)
                         },
                         "month" => {
                             let month_start = now.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-                            let start_ts = DateTime::<Utc>::from_naive_utc_and_offset(month_start, Utc).timestamp();
+                            let start_ts = Local.from_local_datetime(&month_start).unwrap().timestamp();
                             let days = match now.month() {
                                 1|3|5|7|8|10|12 => 31,
                                 4|6|9|11 => 30,
@@ -229,7 +229,7 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
                         },
                         "year" => {
                             let year_start = now.date_naive().with_month(1).unwrap().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-                            let start_ts = DateTime::<Utc>::from_naive_utc_and_offset(year_start, Utc).timestamp();
+                            let start_ts = Local.from_local_datetime(&year_start).unwrap().timestamp();
                             let days = if (now.year() % 4 == 0 && now.year() % 100 != 0) || (now.year() % 400 == 0) { 366 } else { 365 };
                             ((now_ts - start_ts).max(1) as f64, (days * 86400) as f64)
                         },
@@ -251,7 +251,7 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
 }
 
 pub fn print_95th_table(data: NintyFifthData, five_minute_hours: u32) {
-    let now = Utc::now();
+    let now = Local::now();
     let days_in_month = match now.month() {
         1|3|5|7|8|10|12 => 31,
         4|6|9|11 => 30,
