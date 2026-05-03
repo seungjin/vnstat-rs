@@ -183,6 +183,7 @@ async fn main() -> Result<()> {
                                             hostname: db.hostname.clone(),
                                             machine_id: db.machine_id.clone(),
                                             mac_address: mac,
+                                            version: format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("GIT_HASH")),
                                         }
                                     }
                                     Ok(IpcRequest::GetConfig { name }) => {

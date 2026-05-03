@@ -274,6 +274,32 @@ async fn main() -> Result<()> {
 
     if cli.version {
         println!("vnStat-rs {} ({}) by Seungjin Kim", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
+        
+        // Load config to find socket
+        let is_root = unsafe { libc::getuid() == 0 };
+        let etc_config = PathBuf::from("/etc/vnstat-rs.conf");
+        let home = std::env::var("HOME").unwrap_or_default();
+        let user_config = PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
+
+        let file_config = if let Some(ref path) = cli.config {
+            vnstat_rs::load_config(path).unwrap_or_else(|_| vnstat_rs::get_default_config(is_root))
+        } else {
+            vnstat_rs::load_config(&etc_config).unwrap_or_else(|e| {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    vnstat_rs::load_config(&user_config).unwrap_or_else(|_| vnstat_rs::get_default_config(is_root))
+                } else {
+                    vnstat_rs::get_default_config(is_root)
+                }
+            })
+        };
+
+        if let Some(ref socket_path) = file_config.daemon_socket {
+            if socket_path.exists() {
+                if let Ok(IpcResponse::Info { version, .. }) = request_daemon(socket_path, IpcRequest::GetInfo).await {
+                    println!("vnstatd-rs version: {}", version);
+                }
+            }
+        }
         return Ok(());
     }
 
@@ -424,9 +450,10 @@ async fn main() -> Result<()> {
                         print_95th_table(data, file_config.five_minute_hours);
                         return Ok(());
                     }
-                    Ok(IpcResponse::Info { hostname, machine_id, mac_address }) => {
+                    Ok(IpcResponse::Info { hostname, machine_id, mac_address, version }) => {
                         println!("vnStat-rs {} by Seungjin Kim", env!("CARGO_PKG_VERSION"));
                         println!("Daemon Host: {} ({})", hostname, machine_id);
+                        println!("Daemon Version: {}", version);
                         if let Some(mac) = mac_address {
                             println!("MAC Address: {}", mac);
                         }
@@ -490,7 +517,7 @@ async fn main() -> Result<()> {
     }
 
     if cli.info {
-        println!("vnStat-rs {} by Seungjin Kim", env!("CARGO_PKG_VERSION"));
+        println!("vnStat-rs {} ({}) by Seungjin Kim", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
         println!("Hostname: {}, Machine ID: {}", db.hostname, db.machine_id);
         if let Ok(Some(mac)) = db.get_info("mac_address").await {
             println!("MAC Address: {}", mac);
