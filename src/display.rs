@@ -34,7 +34,7 @@ pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
 
     for hostname in hostnames {
         println!();
-        println!("{:-<73}", format!(" Host: {} ", hostname));
+        println!("{:-<73}", format!(" Host: {} ({}) ", hostname, Local::now().format("%Z")));
         println!("                      rx      /      tx      /     total    /   estimated");
         
         let mut host_summaries = by_host.remove(&hostname).unwrap();
@@ -125,14 +125,15 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
                 continue;
             }
             let entries = interface_map.get(&iface).unwrap();
+            let tz_suffix = Local::now().format("%Z").to_string();
             let title = match table {
-                "fiveminute" => "five minute".to_string(),
-                "hour" => "hourly".to_string(),
-                "day" => "daily".to_string(),
-                "month" => "monthly".to_string(),
-                "year" => "yearly".to_string(),
-                "top" => format!("top {}", limit),
-                _ => table.to_string(),
+                "fiveminute" => format!("five minute ({})", tz_suffix),
+                "hour" => format!("hourly ({})", tz_suffix),
+                "day" => format!("daily ({})", tz_suffix),
+                "month" => format!("monthly ({})", tz_suffix),
+                "year" => format!("yearly ({})", tz_suffix),
+                "top" => format!("top {} ({})", limit, tz_suffix),
+                _ => format!("{} ({})", table, tz_suffix),
             };
 
             println!("\n {}  /  {}\n", iface, title);
@@ -282,10 +283,10 @@ pub fn print_95th_table(data: NintyFifthData, five_minute_hours: u32) {
         println!("         \"5MinuteHours\" is currently set at {}.\n", five_minute_hours);
     }
 
-    println!(" {}  /  95th percentile\n", data.interface);
+    println!(" {}  /  95th percentile ({})\n", data.interface, Local::now().format("%Z"));
     
-    let begin_dt = DateTime::from_timestamp(data.begin, 0).unwrap();
-    let end_dt = DateTime::from_timestamp(data.end, 0).unwrap();
+    let begin_dt = DateTime::from_timestamp(data.begin, 0).unwrap().with_timezone(&Local);
+    let end_dt = DateTime::from_timestamp(data.end, 0).unwrap().with_timezone(&Local);
     
     println!(" {} - {} ({} entries, {:.1}% coverage)\n", 
         begin_dt.format("%Y-%m-%d %H:%M"), 
