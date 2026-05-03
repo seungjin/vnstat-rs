@@ -152,7 +152,8 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
             let mut last_date = String::new();
 
             for entry in entries {
-                let dt = DateTime::from_timestamp(entry.date, 0).unwrap();
+                let dt_utc = DateTime::from_timestamp(entry.date, 0).unwrap();
+                let dt = dt_utc.with_timezone(&Local);
                 let date_str = dt.format("%Y-%m-%d").to_string();
                 
                 if (table == "hour" || table == "fiveminute") && date_str != last_date {
