@@ -472,3 +472,47 @@ mod tests {
         assert_eq!(format_rate(500.0), "500.00 bit/s");
     }
 }
+
+pub fn print_hosts_table(hosts: Vec<(String, String, Option<String>, Option<i64>, Option<i64>)>) {
+    if hosts.is_empty() {
+        println!("No hosts found.");
+        return;
+    }
+
+    let mut name_width = 10;
+    let mut ver_width = 10;
+
+    for (name, _id, ver, _, _) in &hosts {
+        name_width = name_width.max(name.len());
+        ver_width = ver_width.max(ver.as_deref().unwrap_or("unknown").len());
+    }
+
+    let header_name = "Hostname";
+    let header_ver = "Version";
+    let header_started = "Started";
+    let header_last = "Last Seen";
+
+    name_width = name_width.max(header_name.len());
+    ver_width = ver_width.max(header_ver.len());
+
+    println!("{:<nw$}   {:<vw$}   {:<19}   {:<19}", 
+        header_name, header_ver, header_started, header_last, 
+        nw = name_width, vw = ver_width);
+    println!("{:-<total_w$}", "", total_w = name_width + ver_width + 19 + 19 + 9);
+
+    for (name, _id, ver, started, last_seen) in hosts {
+        let started_str = started.map(|ts| {
+            let dt = DateTime::from_timestamp(ts, 0).unwrap();
+            dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string()
+        }).unwrap_or_else(|| "unknown".to_string());
+
+        let last_seen_str = last_seen.map(|ts| {
+            let dt = DateTime::from_timestamp(ts, 0).unwrap();
+            dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string()
+        }).unwrap_or_else(|| "unknown".to_string());
+
+        println!("{:<nw$}   {:<vw$}   {:<19}   {:<19}", 
+            name, ver.unwrap_or_else(|| "unknown".to_string()), started_str, last_seen_str,
+            nw = name_width, vw = ver_width);
+    }
+}

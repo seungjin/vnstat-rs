@@ -3,7 +3,7 @@ use clap::{Parser};
 use std::path::{PathBuf};
 use tokio::net::UnixStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use vnstat_rs::{Db, IpcRequest, IpcResponse, print_summary_table, print_history_table, print_95th_table, format_rate};
+use vnstat_rs::{Db, IpcRequest, IpcResponse, print_summary_table, print_history_table, print_95th_table, print_hosts_table, format_rate};
 use chrono::{Local, TimeZone};
 
 async fn request_daemon(socket_path: &PathBuf, req: IpcRequest) -> Result<IpcResponse> {
@@ -500,16 +500,7 @@ async fn main() -> Result<()> {
                         return Ok(());
                     }
                     Ok(IpcResponse::Hosts(hosts)) => {
-                        println!("{:<30} {:<30} {:<30}", "Hostname", "Version", "Started");
-                        println!("{:-<90}", "");
-                        for (name, _id, ver, started) in hosts {
-                            let started_str = started.map(|ts| {
-                                let dt = chrono::DateTime::from_timestamp(ts, 0).unwrap();
-                                dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S %Z").to_string()
-                            }).unwrap_or_else(|| "unknown".to_string());
-                            
-                            println!("{:<30} {:<30} {:<30}", name, ver.unwrap_or_else(|| "unknown".to_string()), started_str);
-                        }
+                        print_hosts_table(hosts);
                         return Ok(());
                     }
                     Ok(IpcResponse::Error(e)) => {
@@ -578,19 +569,9 @@ async fn main() -> Result<()> {
 
     if cli.host_list {
         let hosts = db.get_all_hosts(cli.host.as_deref()).await?;
-        println!("{:<30} {:<30} {:<30}", "Hostname", "Version", "Started");
-        println!("{:-<90}", "");
-        for (name, _id, ver, started) in hosts {
-            let started_str = started.map(|ts| {
-                let dt = chrono::DateTime::from_timestamp(ts, 0).unwrap();
-                dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S %Z").to_string()
-            }).unwrap_or_else(|| "unknown".to_string());
-            
-            println!("{:<30} {:<30} {:<30}", name, ver.unwrap_or_else(|| "unknown".to_string()), started_str);
-        }
+        print_hosts_table(hosts);
         return Ok(());
     }
-
     let final_host_filter = if cli.all_hosts { None } else { cli.host.as_deref().or(current_machine_id.as_deref()) };
 
     if cli.nintyfifth {
