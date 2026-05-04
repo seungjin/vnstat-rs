@@ -153,6 +153,10 @@ struct Cli {
     #[arg(short = '?', long = "help")]
     help: bool,
 
+    /// Show long help
+    #[arg(long = "longhelp")]
+    longhelp: bool,
+
     /// Print version
     #[arg(short = 'V', long = "version")]
     version: bool,
@@ -182,7 +186,7 @@ struct Cli {
     hours: Option<Option<usize>>,
 
     /// Show hours graph
-    #[arg(short = 'g', long = "hoursgraph")]
+    #[arg(long = "hg", alias = "hoursgraph")]
     hoursgraph: bool,
 
     /// Show daily statistics
@@ -198,7 +202,7 @@ struct Cli {
     years: Option<Option<usize>>,
 
     /// Show top 10 days
-    #[arg(short = 'T', long, num_args = 0..=1)]
+    #[arg(short = 't', long = "top", num_args = 0..=1)]
     top: Option<Option<usize>>,
 
     /// Set list begin date
@@ -226,7 +230,7 @@ struct Cli {
     xml: Option<Vec<String>>,
 
     /// Calculate traffic
-    #[arg(short = 't', long = "traffic", num_args = 0..=1)]
+    #[arg(long = "tr", alias = "traffic", num_args = 0..=1)]
     traffic: Option<Option<String>>,
 
     /// Show transfer rate in real time
@@ -261,9 +265,88 @@ struct Cli {
     #[arg(short = 'n', long, value_name = "FILE")]
     config: Option<PathBuf>,
 
+    /// Add interface to database
+    #[arg(long, value_name = "iface")]
+    add: Option<String>,
+
+    /// Remove interface from database
+    #[arg(long, value_name = "iface")]
+    remove: Option<String>,
+
+    /// Rename interface in database
+    #[arg(long, value_names = ["old", "new"])]
+    rename: Option<Vec<String>>,
+
+    /// Set alias for interface
+    #[arg(long, value_name = "alias")]
+    setalias: Option<String>,
+
     /// Show daemon information
     #[arg(long)]
     info: bool,
+}
+
+fn print_help() {
+    println!("vnStat-rs {} by Seungjin Kim", env!("CARGO_PKG_VERSION"));
+    println!();
+    println!("      -5,  --fiveminutes [limit]   show 5 minutes");
+    println!("      -h,  --hours [limit]         show hours");
+    println!("      -hg, --hg                    show hours graph");
+    println!("      -d,  --days [limit]          show days");
+    println!("      -m,  --months [limit]        show months");
+    println!("      -y,  --years [limit]         show years");
+    println!("      -t,  --top [limit]           show top days");
+    println!();
+    println!("      -b, --begin <date>           set list begin date");
+    println!("      -e, --end <date>             set list end date");
+    println!();
+    println!("      --95th                       show 95th percentile");
+    println!("      --oneline [mode]             show simple parsable format");
+    println!("      --json [mode] [limit]        show database in json format");
+    println!("      --xml [mode] [limit]         show database in xml format");
+    println!();
+    println!("      -tr, --tr [time]             calculate traffic");
+    println!("      -l,  --live [mode]           show transfer rate in real time");
+    println!("      -i,  --iface <interface>     select interface");
+    println!();
+    println!("Use \"--longhelp\" for complete list of options.");
+}
+
+fn print_longhelp() {
+    println!("vnStat-rs {} by Seungjin Kim", env!("CARGO_PKG_VERSION"));
+    println!();
+    println!("Query:");
+    println!("      -s,  --short                 use short output");
+    println!("      -5,  --fiveminutes [limit]   show 5 minutes");
+    println!("      -h,  --hours [limit]         show hours");
+    println!("      -hg, --hg                    show hours graph");
+    println!("      -d,  --days [limit]          show days");
+    println!("      -m,  --months [limit]        show months");
+    println!("      -y,  --years [limit]         show years");
+    println!("      -t,  --top [limit]           show top days");
+    println!("      -b,  --begin <date>          set list begin date");
+    println!("      -e,  --end <date>            set list end date");
+    println!("      --oneline [mode]             show simple parsable format");
+    println!("      --json [mode] [limit]        show database in json format");
+    println!("      --xml [mode] [limit]         show database in xml format");
+    println!();
+    println!("Modify:");
+    println!("      --add <iface>                add interface to database");
+    println!("      --remove <iface>             remove interface from database");
+    println!("      --rename <old> <new>         rename interface in database");
+    println!("      --setalias <alias>           set alias for interface");
+    println!();
+    println!("Misc:");
+    println!("      -i,  --iface <interface>     select interface");
+    println!("      -?,  --help                  show short help");
+    println!("      -V,  --version               show version");
+    println!("      -tr, --tr [time]             calculate traffic");
+    println!("      -l,  --live [mode]           show transfer rate in real time");
+    println!("      --limit <limit>              set output entry limit");
+    println!("      --iflist                     show list of available interfaces");
+    println!("      -D,  --dbdir <file>          select database directory");
+    println!("      -n,  --config <file>         select config file");
+    println!("      --longhelp                   show this help");
 }
 
 #[tokio::main]
@@ -271,8 +354,12 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     if cli.help {
-        use clap::CommandFactory;
-        Cli::command().print_help()?;
+        print_help();
+        return Ok(());
+    }
+
+    if cli.longhelp {
+        print_longhelp();
         return Ok(());
     }
 
@@ -391,7 +478,9 @@ async fn main() -> Result<()> {
         if socket_path.exists() {
             let mut requested_table = String::new();
             let mut requested_limit = 0;
-            let req = if cli.info {
+            let req = if cli.add.is_some() || cli.remove.is_some() || cli.rename.is_some() || cli.setalias.is_some() {
+                None
+            } else if cli.info {
                 Some(IpcRequest::GetInfo)
             } else if cli.host_list {
                 Some(IpcRequest::ListHosts { host: cli.host.clone() })
@@ -454,11 +543,7 @@ async fn main() -> Result<()> {
                         }
                         return Ok(());
                     }
-                    Ok(IpcResponse::Summary(mut summaries)) => {
-                        summaries.retain(|s| {
-                            s.today.0 + s.today.1 + s.yesterday.0 + s.yesterday.1 + 
-                            s.this_month.0 + s.this_month.1 + s.last_month.0 + s.last_month.1 > 0
-                        });
+                    Ok(IpcResponse::Summary(summaries)) => {
                         print_summary_table(summaries, current_machine_id.as_deref().unwrap_or(""));
                         return Ok(());
                     }
@@ -540,6 +625,38 @@ async fn main() -> Result<()> {
             return Err(e);
         }
     };
+
+    if let Some(iface) = cli.add {
+        db.create_interface(&iface, 0, 0, None).await?;
+        println!("Interface \"{}\" added to database for host \"{}\".", iface, db.hostname);
+        return Ok(());
+    }
+
+    if let Some(iface) = cli.remove {
+        db.remove_interface(&iface).await?;
+        println!("Interface \"{}\" removed from database for host \"{}\".", iface, db.hostname);
+        return Ok(());
+    }
+
+    if let Some(names) = cli.rename {
+        if names.len() != 2 {
+            return Err(anyhow::anyhow!("Please provide both old and new names: --rename old new"));
+        }
+        db.rename_interface(&names[0], &names[1]).await?;
+        println!("Interface \"{}\" renamed to \"{}\" for host \"{}\".", names[0], names[1], db.hostname);
+        return Ok(());
+    }
+
+    if let Some(alias) = cli.setalias {
+        let iface = cli.iface.ok_or_else(|| anyhow::anyhow!("Please specify interface with -i to set alias"))?;
+        if let Some((id, _, _, _, _)) = db.get_interface(&iface).await? {
+            db.update_interface_alias(&id, &alias).await?;
+            println!("Alias for interface \"{}\" set to \"{}\".", iface, alias);
+        } else {
+            return Err(anyhow::anyhow!("Interface \"{}\" not found.", iface));
+        }
+        return Ok(());
+    }
 
     if cli.init {
         println!("Database initialized for host: {} ({})", db.hostname, db.machine_id);
@@ -634,11 +751,7 @@ async fn main() -> Result<()> {
     }
 
     // Default Table view (vnstat summary)
-    let mut summaries = db.get_summary(cli.iface.as_deref(), final_host_filter).await?;
-    summaries.retain(|s| {
-        s.today.0 + s.today.1 + s.yesterday.0 + s.yesterday.1 + 
-        s.this_month.0 + s.this_month.1 + s.last_month.0 + s.last_month.1 > 0
-    });
+    let summaries = db.get_summary(cli.iface.as_deref(), final_host_filter).await?;
     print_summary_table(summaries, &db.machine_id);
 
     Ok(())

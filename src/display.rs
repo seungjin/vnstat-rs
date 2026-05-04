@@ -34,7 +34,12 @@ pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
 
     for hostname in hostnames {
         println!();
-        println!("{:-<73}", format!(" Host: {} ({}) ", hostname, Local::now().format("%Z")));
+        // Only print host header if it's not the current machine or if we are showing multiple hosts
+        let current_machine_name = hostname::get().ok().and_then(|h| h.into_string().ok()).unwrap_or_else(|| "local".to_string());
+        if by_host.len() > 1 || hostname != current_machine_name {
+            println!("{:-<73}", format!(" Host: {} ({}) ", hostname, Local::now().format("%Z")));
+        }
+        
         println!("                      rx      /      tx      /     total    /   estimated");
         
         let mut host_summaries = by_host.remove(&hostname).unwrap();
@@ -44,14 +49,14 @@ pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
             if summary.name == "lo" {
                 continue;
             }
-            println!("   {}:", summary.name);
+            println!(" {}:", summary.name);
 
             let print_line = |label: &str, rx: u64, tx: u64, est: Option<String>| {
                 let total = rx + tx;
-                print!("      {:<12} {:>10}  /  {:>10}  /  {:>10}", 
+                print!("{:>14}{:>11}  /  {:>11}  /  {:>11}", 
                     label, format_bytes_short(rx), format_bytes_short(tx), format_bytes_short(total));
                 if let Some(e) = est {
-                    println!("  /  {:>10}", e);
+                    println!("  /  {:>11}", e);
                 } else {
                     println!();
                 }
@@ -72,8 +77,9 @@ pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
                 _ => 30,
             };
             let current_day = now.day() as f64;
-            let tm_est = if current_day > 0.0 {
-                format_bytes_short(((tm_rx + tm_tx) as f64 * (days_in_month as f64 / current_day)) as u64)
+            let tm_total = tm_rx + tm_tx;
+            let tm_est = if current_day > 0.0 && tm_total > 0 {
+                format_bytes_short((tm_total as f64 * (days_in_month as f64 / current_day)) as u64)
             } else {
                 "--".to_string()
             };
@@ -85,9 +91,15 @@ pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
 
             // Today
             let (t_rx, t_tx) = summary.today;
+            let t_total = t_rx + t_tx;
             let secs_passed = (now_ts - today_ts).max(1) as f64;
-            let t_est = format_bytes_short(((t_rx + t_tx) as f64 * (86400.0 / secs_passed)) as u64);
+            let t_est = if t_total > 0 {
+                format_bytes_short((t_total as f64 * (86400.0 / secs_passed)) as u64)
+            } else {
+                "--".to_string()
+            };
             print_line("today", t_rx, t_tx, Some(t_est));
+            println!();
         }
     }
 }

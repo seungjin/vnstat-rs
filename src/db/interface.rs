@@ -63,6 +63,17 @@ impl Db {
         Ok(())
     }
 
+    pub async fn update_interface_alias(&self, id: &str, alias: &str) -> Result<()> {
+        let sql = "UPDATE interface SET alias = ? WHERE id = ?";
+        self.local_conn.execute(sql, (alias.to_string(), id.to_string())).await?;
+        if let Some(ref remote) = self.remote_conn {
+            if let Err(e) = remote.execute(sql, (alias.to_string(), id.to_string())).await {
+                eprintln!("Warning: Failed to update interface alias on remote: {}", e);
+            }
+        }
+        Ok(())
+    }
+
     pub async fn set_interface_active(&self, id: &str, active: bool) -> Result<()> {
         let sql = "UPDATE interface SET active = ? WHERE id = ?";
         let active_val = if active { 1 } else { 0 };
@@ -73,5 +84,45 @@ impl Db {
             }
         }
         Ok(())
+    }
+
+    pub async fn remove_interface(&self, name: &str) -> Result<()> {
+        if let Some((id, _, _, _, _)) = self.get_interface(name).await? {
+            // Delete traffic data first (cascading delete would be better, but let's be explicit)
+            let tables = ["fiveminute", "hour", "day", "month", "year", "top"];
+            for table in tables {
+                let sql = format!("DELETE FROM {} WHERE interface = ?", table);
+                self.local_conn.execute(&sql, [id.clone()]).await?;
+                if let Some(ref remote) = self.remote_conn {
+                    let _ = remote.execute(&sql, [id.clone()]).await;
+                }
+            }
+
+            let sql = "DELETE FROM interface WHERE id = ?";
+            self.local_conn.execute(sql, [id.clone()]).await?;
+            if let Some(ref remote) = self.remote_conn {
+                if let Err(e) = remote.execute(sql, [id.clone()]).await {
+                    eprintln!("Warning: Failed to remove interface on remote: {}", e);
+                }
+            }
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Interface \"{}\" not found for host \"{}\"", name, self.hostname))
+        }
+    }
+
+    pub async fn rename_interface(&self, old_name: &str, new_name: &str) -> Result<()> {
+        if let Some((id, _, _, _, _)) = self.get_interface(old_name).await? {
+            let sql = "UPDATE interface SET name = ? WHERE id = ?";
+            self.local_conn.execute(sql, (new_name.to_string(), id.clone())).await?;
+            if let Some(ref remote) = self.remote_conn {
+                if let Err(e) = remote.execute(sql, (new_name.to_string(), id.clone())).await {
+                    eprintln!("Warning: Failed to rename interface on remote: {}", e);
+                }
+            }
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("Interface \"{}\" not found for host \"{}\"", old_name, self.hostname))
+        }
     }
 }
