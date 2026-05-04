@@ -1,4 +1,4 @@
-version = 2026050303
+version = 2026050402
 
 # Full schema for fresh installs (includes all latest columns)
 sql = """
@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS host (
     hostname     TEXT NOT NULL,
     mac_address  TEXT,
     version      TEXT,
-    started      INTEGER
+    started      INTEGER,
+    last_seen    INTEGER
 );
 
 -- Interface table
@@ -103,3 +104,11 @@ sql = "ALTER TABLE host ADD COLUMN started INTEGER;"
 [[migrations]]
 version = 2026050303
 sql = "ALTER TABLE host ADD COLUMN version TEXT;"
+
+[[migrations]]
+version = 2026050401
+sql = "ALTER TABLE host RENAME COLUMN started TO last_seen;"
+
+[[migrations]]
+version = 2026050402
+sql = "ALTER TABLE host ADD COLUMN started INTEGER;"

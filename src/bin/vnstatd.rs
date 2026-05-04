@@ -221,6 +221,11 @@ async fn main() -> Result<()> {
             eprintln!("Error updating stats: {}", e);
         }
 
+        // Update host heartbeat
+        if let Err(e) = db_loop.update_host_last_seen().await {
+            eprintln!("Error updating host heartbeat: {}", e);
+        }
+
         // Apply data retention pruning
         if let Err(e) = db_loop.prune_stats(&file_config).await {
             eprintln!("Error pruning stats: {}", e);
