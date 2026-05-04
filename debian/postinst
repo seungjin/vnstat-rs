@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        if ! getent group vnstat > /dev/null; then
+            groupadd -r vnstat
+        fi
+        if ! getent passwd vnstat > /dev/null; then
+            useradd -r -g vnstat -d /var/lib/vnstat-rs -s /sbin/nologin -c "vnStat-rs monitor" vnstat
+        fi
+        mkdir -p /var/lib/vnstat-rs
+        chown vnstat:vnstat /var/lib/vnstat-rs
+        systemctl daemon-reload
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0

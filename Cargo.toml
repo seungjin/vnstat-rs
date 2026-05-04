@@ -4,6 +4,9 @@ version = "0.1.41"
 edition = "2024"
 authors = ["Seungjin Kim"]
 license = "MIT OR Apache-2.0"
+description = "A Rust-written network monitoring tool with robust local storage and optional remote synchronization."
+homepage = "https://github.com/seungjin/vnstat-rs"
+repository = "https://github.com/seungjin/vnstat-rs"
 
 [dependencies]
 libsql = { version = "0.6.0", features = ["hrana", "remote"] }
@@ -31,3 +34,41 @@ path = "src/bin/vnstat.rs"
 [[bin]]
 name = "vnstatd-rs"
 path = "src/bin/vnstatd.rs"
+
+[package.metadata.deb]
+maintainer = "Seungjin Kim <seungjin@duck.com>"
+copyright = "2026 Seungjin Kim"
+license-file = ["LICENSE-MIT", "4"]
+extended-description = """\
+A network traffic monitor for Linux that keeps a log of network traffic for the selected interface(s).
+It uses the network interface statistics provided by the kernel as information source.
+This version is written in Rust and uses libsql for data storage."""
+assets = [
+    ["vnstat-rs", "usr/bin/vnstat-rs", "755"],
+    ["vnstatd-rs", "usr/bin/vnstatd-rs", "755"],
+    ["vnstatd-rs.service", "lib/systemd/system/vnstatd-rs.service", "644"],
+    ["vnstat.conf-sample", "etc/vnstat-rs.conf", "644"],
+]
+maintainer-scripts = "debian"
+
+[package.metadata.generate-rpm]
+assets = [
+    { source = "vnstat-rs", dest = "/usr/bin/vnstat-rs", mode = "755" },
+    { source = "vnstatd-rs", dest = "/usr/bin/vnstatd-rs", mode = "755" },
+    { source = "vnstatd-rs.service", dest = "/usr/lib/systemd/system/vnstatd-rs.service", mode = "644" },
+    { source = "vnstat.conf-sample", dest = "/etc/vnstat-rs.conf", mode = "644", config = true },
+]
+post_install = """
+if ! getent group vnstat > /dev/null; then
+    groupadd -r vnstat
+fi
+if ! getent passwd vnstat > /dev/null; then
+    useradd -r -g vnstat -d /var/lib/vnstat-rs -s /sbin/nologin -c \"vnStat-rs monitor\" vnstat
+fi
+mkdir -p /var/lib/vnstat-rs
+chown vnstat:vnstat /var/lib/vnstat-rs
+systemctl daemon-reload
+"""
+pre_uninstall = """
+systemctl stop vnstatd-rs.service >/dev/null || true
+"""
