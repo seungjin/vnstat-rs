@@ -219,7 +219,9 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
             println!("{:indent$}------------------------+-------------+-------------+---------------", "", indent = separator_indent);
 
             if let Some(latest) = entries.last() {
-                let dt = DateTime::from_timestamp(latest.date, 0).unwrap();
+                let dt_utc = DateTime::from_timestamp(latest.date, 0).unwrap();
+                let dt = dt_utc.with_timezone(&Local);
+                
                 let is_current = match table {
                     "day" => dt.date_naive() == now.date_naive(),
                     "month" => dt.year() == now.year() && dt.month() == now.month(),
@@ -259,8 +261,21 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
                         let est_tx = (latest.tx as f64 * (total_secs / secs_passed)) as u64;
                         let est_total = est_rx + est_tx;
 
-                        println!("     {:<12} {:>10} |  {:>10} |  {:>10} |", 
-                            "estimated", format_bytes_short(est_rx), format_bytes_short(est_tx), format_bytes_short(est_total));
+                        let rx_str = format_bytes_short(est_rx);
+                        let tx_str = format_bytes_short(est_tx);
+                        let total_str = format_bytes_short(est_total);
+                        let label = "estimated";
+
+                        let label_part = match table {
+                            "hour" | "fiveminute" => format!("         {:<6}{:>13} ", label, rx_str),
+                            "month" => format!("       {:<7}    {:>10} ", label, rx_str),
+                            "day" => format!("      {:<10}  {:>10} ", label, rx_str),
+                            "year" => format!("        {:<4}       {:>10} ", label, rx_str),
+                            _ => format!("     {:<16} {:>10} ", label, rx_str),
+                        };
+
+                        println!("{}|  {:>10} |  {:>10} |", 
+                            label_part, tx_str, total_str);
                     }
                 }
             }
