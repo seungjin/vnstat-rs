@@ -37,7 +37,7 @@ impl Db {
 
     pub async fn get_all_hosts(&self, filter_host: Option<&str>) -> Result<Vec<(String, String, Option<String>, Option<i64>, Option<i64>)>> {
         let conn = self.remote_conn.as_ref().unwrap_or(&self.local_conn);
-        let mut sql = "SELECT h.hostname, h.machine_id, h.version, h.started, COALESCE(MAX(i.updated), h.last_seen) FROM host h LEFT JOIN interface i ON h.id = i.host_id".to_string();
+        let mut sql = "SELECT h.hostname, h.machine_id, h.version, h.started, MAX(COALESCE(MAX(i.updated), 0), h.last_seen) FROM host h LEFT JOIN interface i ON h.id = i.host_id".to_string();
         let mut params = Vec::new();
 
         if let Some(host) = filter_host {
