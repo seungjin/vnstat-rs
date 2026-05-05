@@ -9,13 +9,13 @@ use chrono::{Datelike, Local, TimeZone, Utc, Timelike};
 impl Db {
     pub async fn add_traffic(&self, interface_id: &str, table: &str, date: i64, rx: u64, tx: u64) -> Result<()> {
         let sql = format!(
-                "INSERT INTO {} (interface, date, rx, tx) VALUES (?, ?, ?, ?)
+                "INSERT INTO {} (interface, host_id, date, rx, tx) VALUES (?, ?, ?, ?, ?)
                  ON CONFLICT(interface, date) DO UPDATE SET rx = rx + excluded.rx, tx = tx + excluded.tx",
                 table
             );
-        self.local_conn.execute(&sql, (interface_id.to_string(), date, rx as i64, tx as i64)).await?;
+        self.local_conn.execute(&sql, (interface_id.to_string(), self.host_id.clone(), date, rx as i64, tx as i64)).await?;
         if let Some(ref remote) = self.remote_conn {
-            if let Err(e) = remote.execute(&sql, (interface_id.to_string(), date, rx as i64, tx as i64)).await {
+            if let Err(e) = remote.execute(&sql, (interface_id.to_string(), self.host_id.clone(), date, rx as i64, tx as i64)).await {
                 eprintln!("Warning: Failed to add traffic to remote (table {}): {}", table, e);
             }
         }
@@ -54,7 +54,7 @@ impl Db {
 
         // 5-minute data
         let five_min_cutoff = now - (config.five_minute_hours as i64 * 3600);
-        let sql5 = "DELETE FROM fiveminute WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
+        let sql5 = "DELETE FROM fiveminute WHERE date < ? AND host_id = ?";
         self.local_conn.execute(sql5, (five_min_cutoff, host_id.clone())).await?;
         if let Some(ref remote) = self.remote_conn {
             if let Err(e) = remote.execute(sql5, (five_min_cutoff, host_id.clone())).await {
@@ -64,7 +64,7 @@ impl Db {
 
         // Hourly data
         let hourly_cutoff = now - (config.hourly_days as i64 * 86400);
-        let sqlh = "DELETE FROM hour WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
+        let sqlh = "DELETE FROM hour WHERE date < ? AND host_id = ?";
         self.local_conn.execute(sqlh, (hourly_cutoff, host_id.clone())).await?;
         if let Some(ref remote) = self.remote_conn {
             if let Err(e) = remote.execute(sqlh, (hourly_cutoff, host_id.clone())).await {
@@ -74,7 +74,7 @@ impl Db {
 
         // Daily data
         let daily_cutoff = now - (config.daily_days as i64 * 86400);
-        let sqld = "DELETE FROM day WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
+        let sqld = "DELETE FROM day WHERE date < ? AND host_id = ?";
         self.local_conn.execute(sqld, (daily_cutoff, host_id.clone())).await?;
         if let Some(ref remote) = self.remote_conn {
             if let Err(e) = remote.execute(sqld, (daily_cutoff, host_id.clone())).await {
@@ -84,7 +84,7 @@ impl Db {
 
         // Monthly data (approximate 30 days per month for simplicity of cutoff)
         let monthly_cutoff = now - (config.monthly_months as i64 * 30 * 86400);
-        let sqlm = "DELETE FROM month WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
+        let sqlm = "DELETE FROM month WHERE date < ? AND host_id = ?";
         self.local_conn.execute(sqlm, (monthly_cutoff, host_id.clone())).await?;
         if let Some(ref remote) = self.remote_conn {
             if let Err(e) = remote.execute(sqlm, (monthly_cutoff, host_id.clone())).await {
@@ -95,7 +95,7 @@ impl Db {
         // Yearly data
         if config.yearly_years >= 0 {
             let yearly_cutoff = now - (config.yearly_years as i64 * 365 * 86400);
-            let sqly = "DELETE FROM year WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
+            let sqly = "DELETE FROM year WHERE date < ? AND host_id = ?";
             self.local_conn.execute(sqly, (yearly_cutoff, host_id.clone())).await?;
             if let Some(ref remote) = self.remote_conn {
                 if let Err(e) = remote.execute(sqly, (yearly_cutoff, host_id.clone())).await {
@@ -583,7 +583,12 @@ mod tests {
 
         // Add traffic for both
         db.add_traffic(&iface_a, "fiveminute", old_date, 100, 100).await?;
-        db.add_traffic(&iface_b, "fiveminute", old_date, 200, 200).await?;
+        
+        // Manually add traffic for Host B with its host_id (since db.add_traffic uses db.host_id)
+        db.local_conn.execute(
+            "INSERT INTO fiveminute (interface, host_id, date, rx, tx) VALUES (?, ?, ?, ?, ?)",
+            (iface_b.clone(), host_b_id.clone(), old_date, 200i64, 200i64)
+        ).await?;
 
         // Configure retention: 5MinuteHours = 48
         let mut config = Config::default();
