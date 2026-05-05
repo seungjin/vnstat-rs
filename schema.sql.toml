@@ -1,4 +1,4 @@
-version = 2026050503
+version = 2026050504
 
 # Full schema for fresh installs (includes all latest columns)
 sql = """
@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS interface (
 CREATE TABLE IF NOT EXISTS fiveminute (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     interface    TEXT REFERENCES interface(id) ON DELETE CASCADE,
-    host_id      TEXT REFERENCES host(id) ON DELETE CASCADE,
     date         INTEGER NOT NULL,
     rx           INTEGER NOT NULL,
     tx           INTEGER NOT NULL,
@@ -42,7 +41,6 @@ CREATE TABLE IF NOT EXISTS fiveminute (
 CREATE TABLE IF NOT EXISTS hour (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     interface    TEXT REFERENCES interface(id) ON DELETE CASCADE,
-    host_id      TEXT REFERENCES host(id) ON DELETE CASCADE,
     date         INTEGER NOT NULL,
     rx           INTEGER NOT NULL,
     tx           INTEGER NOT NULL,
@@ -52,7 +50,6 @@ CREATE TABLE IF NOT EXISTS hour (
 CREATE TABLE IF NOT EXISTS day (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     interface    TEXT REFERENCES interface(id) ON DELETE CASCADE,
-    host_id      TEXT REFERENCES host(id) ON DELETE CASCADE,
     date         INTEGER NOT NULL,
     rx           INTEGER NOT NULL,
     tx           INTEGER NOT NULL,
@@ -62,7 +59,6 @@ CREATE TABLE IF NOT EXISTS day (
 CREATE TABLE IF NOT EXISTS month (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     interface    TEXT REFERENCES interface(id) ON DELETE CASCADE,
-    host_id      TEXT REFERENCES host(id) ON DELETE CASCADE,
     date         INTEGER NOT NULL,
     rx           INTEGER NOT NULL,
     tx           INTEGER NOT NULL,
@@ -72,7 +68,6 @@ CREATE TABLE IF NOT EXISTS month (
 CREATE TABLE IF NOT EXISTS year (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     interface    TEXT REFERENCES interface(id) ON DELETE CASCADE,
-    host_id      TEXT REFERENCES host(id) ON DELETE CASCADE,
     date         INTEGER NOT NULL,
     rx           INTEGER NOT NULL,
     tx           INTEGER NOT NULL,
@@ -82,7 +77,6 @@ CREATE TABLE IF NOT EXISTS year (
 CREATE TABLE IF NOT EXISTS top (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     interface    TEXT REFERENCES interface(id) ON DELETE CASCADE,
-    host_id      TEXT REFERENCES host(id) ON DELETE CASCADE,
     date         INTEGER NOT NULL,
     rx           INTEGER NOT NULL,
     tx           INTEGER NOT NULL,
@@ -132,4 +126,15 @@ ALTER TABLE year ADD COLUMN host_id TEXT;
 UPDATE year SET host_id = (SELECT host_id FROM interface WHERE interface.id = year.interface);
 ALTER TABLE top ADD COLUMN host_id TEXT;
 UPDATE top SET host_id = (SELECT host_id FROM interface WHERE interface.id = top.interface);
+"""
+
+[[migrations]]
+version = 2026050504
+sql = """
+ALTER TABLE fiveminute DROP COLUMN host_id;
+ALTER TABLE hour DROP COLUMN host_id;
+ALTER TABLE day DROP COLUMN host_id;
+ALTER TABLE month DROP COLUMN host_id;
+ALTER TABLE year DROP COLUMN host_id;
+ALTER TABLE top DROP COLUMN host_id;
 """
