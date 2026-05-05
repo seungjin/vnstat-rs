@@ -1,4 +1,4 @@
-version = 2026050504
+version = 2026050505
 
 # Full schema for fresh installs (includes all latest columns)
 sql = """
@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS host (
 
 -- Interface table
 CREATE TABLE IF NOT EXISTS interface (
-    id           TEXT PRIMARY KEY,
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
     host_id      TEXT NOT NULL REFERENCES host(id) ON DELETE CASCADE,
     name         TEXT NOT NULL,
     alias        TEXT,
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS interface (
 -- Resolution tables
 CREATE TABLE IF NOT EXISTS fiveminute (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    interface    TEXT REFERENCES interface(id) ON DELETE CASCADE,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
     date         INTEGER NOT NULL,
     rx           INTEGER NOT NULL,
     tx           INTEGER NOT NULL,
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS fiveminute (
 
 CREATE TABLE IF NOT EXISTS hour (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    interface    TEXT REFERENCES interface(id) ON DELETE CASCADE,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
     date         INTEGER NOT NULL,
     rx           INTEGER NOT NULL,
     tx           INTEGER NOT NULL,
@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS hour (
 
 CREATE TABLE IF NOT EXISTS day (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    interface    TEXT REFERENCES interface(id) ON DELETE CASCADE,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
     date         INTEGER NOT NULL,
     rx           INTEGER NOT NULL,
     tx           INTEGER NOT NULL,
@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS day (
 
 CREATE TABLE IF NOT EXISTS month (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    interface    TEXT REFERENCES interface(id) ON DELETE CASCADE,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
     date         INTEGER NOT NULL,
     rx           INTEGER NOT NULL,
     tx           INTEGER NOT NULL,
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS month (
 
 CREATE TABLE IF NOT EXISTS year (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    interface    TEXT REFERENCES interface(id) ON DELETE CASCADE,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
     date         INTEGER NOT NULL,
     rx           INTEGER NOT NULL,
     tx           INTEGER NOT NULL,
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS year (
 
 CREATE TABLE IF NOT EXISTS top (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    interface    TEXT REFERENCES interface(id) ON DELETE CASCADE,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
     date         INTEGER NOT NULL,
     rx           INTEGER NOT NULL,
     tx           INTEGER NOT NULL,
@@ -137,4 +137,114 @@ ALTER TABLE day DROP COLUMN host_id;
 ALTER TABLE month DROP COLUMN host_id;
 ALTER TABLE year DROP COLUMN host_id;
 ALTER TABLE top DROP COLUMN host_id;
+"""
+
+[[migrations]]
+version = 2026050505
+sql = """
+-- Rename old tables
+ALTER TABLE interface RENAME TO interface_old;
+ALTER TABLE fiveminute RENAME TO fiveminute_old;
+ALTER TABLE hour RENAME TO hour_old;
+ALTER TABLE day RENAME TO day_old;
+ALTER TABLE month RENAME TO month_old;
+ALTER TABLE year RENAME TO year_old;
+ALTER TABLE top RENAME TO top_old;
+
+-- Recreate interface table
+CREATE TABLE interface (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id      TEXT NOT NULL REFERENCES host(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL,
+    alias        TEXT,
+    mac_address  TEXT,
+    active       INTEGER NOT NULL DEFAULT 1,
+    created      INTEGER NOT NULL,
+    updated      INTEGER NOT NULL,
+    rxcounter    INTEGER NOT NULL DEFAULT 0,
+    txcounter    INTEGER NOT NULL DEFAULT 0,
+    rxtotal      INTEGER NOT NULL DEFAULT 0,
+    txtotal      INTEGER NOT NULL DEFAULT 0,
+    CONSTRAINT u_host_name UNIQUE(host_id, name)
+);
+
+-- Copy interface data (SQLite will generate new INTEGER IDs)
+INSERT INTO interface (host_id, name, alias, mac_address, active, created, updated, rxcounter, txcounter, rxtotal, txtotal)
+SELECT host_id, name, alias, mac_address, active, created, updated, rxcounter, txcounter, rxtotal, txtotal FROM interface_old;
+
+-- Helper to map data: Recreate traffic tables and insert while joining
+CREATE TABLE fiveminute (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT INTO fiveminute (interface, date, rx, tx)
+SELECT i.id, o.date, o.rx, o.tx FROM fiveminute_old o JOIN interface_old io ON o.interface = io.id JOIN interface i ON i.host_id = io.host_id AND i.name = io.name;
+
+CREATE TABLE hour (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT INTO hour (interface, date, rx, tx)
+SELECT i.id, o.date, o.rx, o.tx FROM hour_old o JOIN interface_old io ON o.interface = io.id JOIN interface i ON i.host_id = io.host_id AND i.name = io.name;
+
+CREATE TABLE day (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT INTO day (interface, date, rx, tx)
+SELECT i.id, o.date, o.rx, o.tx FROM day_old o JOIN interface_old io ON o.interface = io.id JOIN interface i ON i.host_id = io.host_id AND i.name = io.name;
+
+CREATE TABLE month (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT INTO month (interface, date, rx, tx)
+SELECT i.id, o.date, o.rx, o.tx FROM month_old o JOIN interface_old io ON o.interface = io.id JOIN interface i ON i.host_id = io.host_id AND i.name = io.name;
+
+CREATE TABLE year (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT INTO year (interface, date, rx, tx)
+SELECT i.id, o.date, o.rx, o.tx FROM year_old o JOIN interface_old io ON o.interface = io.id JOIN interface i ON i.host_id = io.host_id AND i.name = io.name;
+
+CREATE TABLE top (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT INTO top (interface, date, rx, tx)
+SELECT i.id, o.date, o.rx, o.tx FROM top_old o JOIN interface_old io ON o.interface = io.id JOIN interface i ON i.host_id = io.host_id AND i.name = io.name;
+
+-- Drop old tables
+DROP TABLE interface_old;
+DROP TABLE fiveminute_old;
+DROP TABLE hour_old;
+DROP TABLE day_old;
+DROP TABLE month_old;
+DROP TABLE year_old;
+DROP TABLE top_old;
 """

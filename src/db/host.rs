@@ -45,7 +45,12 @@ impl Db {
         let mut rows = conn.query(&sql, libsql::params_from_iter(params)).await?;
         let mut hosts = Vec::new();
         while let Some(row) = rows.next().await? {
-            hosts.push((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?));
+            let hostname: String = row.get(0)?;
+            let machine_id: String = row.get(1)?;
+            let version: Option<String> = row.get(2)?;
+            let started: Option<i64> = row.get(3)?;
+            let last_seen: Option<i64> = row.get(4)?;
+            hosts.push((hostname, machine_id, version, started, last_seen));
         }
         Ok(hosts)
     }

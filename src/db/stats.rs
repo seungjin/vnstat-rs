@@ -7,22 +7,22 @@ use libsql::params;
 use chrono::{Datelike, Local, TimeZone, Utc, Timelike};
 
 impl Db {
-    pub async fn add_traffic(&self, interface_id: &str, table: &str, date: i64, rx: u64, tx: u64) -> Result<()> {
+    pub async fn add_traffic(&self, interface_id: i64, table: &str, date: i64, rx: u64, tx: u64) -> Result<()> {
         let sql = format!(
                 "INSERT INTO {} (interface, date, rx, tx) VALUES (?, ?, ?, ?)
                  ON CONFLICT(interface, date) DO UPDATE SET rx = rx + excluded.rx, tx = tx + excluded.tx",
                 table
             );
-        self.local_conn.execute(&sql, (interface_id.to_string(), date, rx as i64, tx as i64)).await?;
+        self.local_conn.execute(&sql, (interface_id, date, rx as i64, tx as i64)).await?;
         if let Some(ref remote) = self.remote_conn {
-            if let Err(e) = remote.execute(&sql, (interface_id.to_string(), date, rx as i64, tx as i64)).await {
+            if let Err(e) = remote.execute(&sql, (interface_id, date, rx as i64, tx as i64)).await {
                 eprintln!("Warning: Failed to add traffic to remote (table {}): {}", table, e);
             }
         }
         Ok(())
     }
 
-    pub async fn add_history_entry(&self, id: &str, rx_delta: u64, tx_delta: u64) -> Result<()> {
+    pub async fn add_history_entry(&self, id: i64, rx_delta: u64, tx_delta: u64) -> Result<()> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         let dt_utc = Utc::now();
 
@@ -108,16 +108,17 @@ impl Db {
         let mut rows = self.local_conn.query("SELECT id FROM interface WHERE host_id = ?", [host_id.clone()]).await?;
         let mut interfaces = Vec::new();
         while let Some(row) = rows.next().await? {
-            interfaces.push(row.get::<String>(0)?);
+            let id: i64 = row.get(0)?;
+            interfaces.push(id);
         }
 
         for iface_id in interfaces {
             let delete_sql = "DELETE FROM top WHERE interface = ? AND date NOT IN (
                     SELECT date FROM top WHERE interface = ? ORDER BY (rx + tx) DESC LIMIT ?
                 )";
-            self.local_conn.execute(delete_sql, (iface_id.clone(), iface_id.clone(), config.top_day_entries as i64)).await?;
+            self.local_conn.execute(delete_sql, (iface_id, iface_id, config.top_day_entries as i64)).await?;
             if let Some(ref remote) = self.remote_conn {
-                if let Err(e) = remote.execute(delete_sql, (iface_id.clone(), iface_id.clone(), config.top_day_entries as i64)).await {
+                if let Err(e) = remote.execute(delete_sql, (iface_id, iface_id, config.top_day_entries as i64)).await {
                     eprintln!("Warning: Failed to prune top data on remote for interface {}: {}", iface_id, e);
                 }
             }
@@ -137,14 +138,14 @@ impl Db {
                 }
             }
             if let Some((id, last_rx, last_tx, current_mac, updated)) = self.get_interface(&stat.name).await? {
-                seen_ids.insert(id.clone());
+                seen_ids.insert(id);
                 
                 // Mark as active if it was inactive
-                let _ = self.set_interface_active(&id, true).await;
+                let _ = self.set_interface_active(id, true).await;
 
                 if current_mac.is_none() || current_mac.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
                     if let Some(ref new_mac) = stat.mac_address {
-                        let _ = self.update_interface_mac(&id, new_mac).await;
+                        let _ = self.update_interface_mac(id, new_mac).await;
                     }
                 }
 
@@ -177,13 +178,13 @@ impl Db {
 
                 if rx_delta > 0 || tx_delta > 0 {
                     println!("Updating interface {} (+{} RX, +{} TX)...", stat.name, rx_delta, tx_delta);
-                    self.update_interface_counters(&id, stat.rx_bytes, stat.tx_bytes, rx_delta, tx_delta).await?;
-                    self.add_history_entry(&id, rx_delta, tx_delta).await?;
+                    self.update_interface_counters(id, stat.rx_bytes, stat.tx_bytes, rx_delta, tx_delta).await?;
+                    self.add_history_entry(id, rx_delta, tx_delta).await?;
                 }
             } else {
                 let id = self.create_interface(&stat.name, stat.rx_bytes, stat.tx_bytes, stat.mac_address).await?;
-                seen_ids.insert(id.clone());
-                self.add_history_entry(&id, 0, 0).await?;
+                seen_ids.insert(id);
+                self.add_history_entry(id, 0, 0).await?;
                 println!("New interface found and registered: {} (host: {})", stat.name, self.hostname);
             }
         }
@@ -196,7 +197,7 @@ impl Db {
                 // Since get_all_interface_stats doesn't return ID, we'll use a new helper or get_interface
                 if let Some((id, _, _, _, _)) = self.get_interface(&iface_stat.name).await? {
                     if !seen_ids.contains(&id) {
-                        let _ = self.set_interface_active(&id, false).await;
+                        let _ = self.set_interface_active(id, false).await;
                     }
                 }
             }
@@ -230,8 +231,8 @@ impl Db {
             let name: String = row.get(1)?;
             let alias: Option<String> = row.get(2)?;
             let mac: Option<String> = row.get(3)?;
-            let rxtotal: u64 = row.get::<i64>(4)? as u64;
-            let txtotal: u64 = row.get::<i64>(5)? as u64;
+            let rxtotal: i64 = row.get(4)?;
+            let txtotal: i64 = row.get(5)?;
             let hostname: String = row.get(6)?;
             let created: i64 = row.get(7)?;
             let updated: i64 = row.get(8)?;
@@ -240,8 +241,8 @@ impl Db {
                 name,
                 alias,
                 mac_address: mac,
-                rx_bytes: rxtotal,
-                tx_bytes: txtotal,
+                rx_bytes: rxtotal as u64,
+                tx_bytes: txtotal as u64,
                 rx_packets: 0,
                 tx_packets: 0,
                 hostname,
@@ -271,7 +272,7 @@ impl Db {
         let mut iface_rows = conn.query(&ifaces_query, params![]).await?;
         let mut interfaces = Vec::new();
         while let Some(row) = iface_rows.next().await? {
-            interfaces.push((row.get::<String>(0)?, row.get::<String>(1)?, row.get::<String>(2)?, row.get::<String>(3)?));
+            interfaces.push((row.get::<i64>(0)?, row.get::<String>(1)?, row.get::<String>(2)?, row.get::<String>(3)?));
         }
 
         let mut history = Vec::new();
@@ -311,13 +312,13 @@ impl Db {
                 query_str.push_str(&format!("ORDER BY date DESC LIMIT {}", limit));
             }
 
-            let mut data_rows = active_conn.query(&query_str, [id.clone()]).await?;
+            let mut data_rows = active_conn.query(&query_str, [id]).await?;
             
             if group_by_table {
                 let mut aggregated: std::collections::BTreeMap<i64, (u64, u64)> = std::collections::BTreeMap::new();
                 while let Some(row) = data_rows.next().await? {
-                    let rx: u64 = row.get::<i64>(0)? as u64;
-                    let tx: u64 = row.get::<i64>(1)? as u64;
+                    let rx: i64 = row.get(0)?;
+                    let tx: i64 = row.get(1)?;
                     let date_utc: i64 = row.get(2)?;
                     
                     let dt_local = Local.from_utc_datetime(&chrono::DateTime::from_timestamp(date_utc, 0).unwrap().naive_utc());
@@ -342,8 +343,8 @@ impl Db {
                     };
                     
                     let entry = aggregated.entry(bucket_ts).or_insert((0, 0));
-                    entry.0 += rx;
-                    entry.1 += tx;
+                    entry.0 += rx as u64;
+                    entry.1 += tx as u64;
                 }
                 
                 for (date, (rx, tx)) in aggregated.into_iter().rev().take(limit) {
@@ -357,12 +358,15 @@ impl Db {
                 }
             } else {
                 while let Some(row) = data_rows.next().await? {
+                    let date: i64 = row.get(2)?;
+                    let rx: i64 = row.get(0)?;
+                    let tx: i64 = row.get(1)?;
                     history.push(HistoryEntry {
                         hostname: hostname.clone(),
                         interface: name.clone(),
-                        date: row.get(2)?,
-                        rx: row.get::<i64>(0)? as u64,
-                        tx: row.get::<i64>(1)? as u64,
+                        date,
+                        rx: rx as u64,
+                        tx: tx as u64,
                     });
                 }
             }
@@ -400,7 +404,7 @@ impl Db {
         let mut iface_rows = conn.query(&ifaces_query, params![]).await?;
         let mut interfaces = Vec::new();
         while let Some(row) = iface_rows.next().await? {
-            interfaces.push((row.get::<String>(0)?, row.get::<String>(1)?, row.get::<String>(2)?, row.get::<String>(3)?));
+            interfaces.push((row.get::<i64>(0)?, row.get::<String>(1)?, row.get::<String>(2)?, row.get::<String>(3)?));
         }
 
         let now_local = Local::now();
@@ -436,8 +440,8 @@ impl Db {
             
             while let Some(row) = h_rows.next().await? {
                 let date_utc: i64 = row.get(0)?;
-                let rx: u64 = row.get::<i64>(1)? as u64;
-                let tx: u64 = row.get::<i64>(2)? as u64;
+                let rx: i64 = row.get(1)?;
+                let tx: i64 = row.get(2)?;
                 
                 // Convert UTC bucket to Local to see where it falls
                 let dt_local = Local.from_utc_datetime(&chrono::DateTime::from_timestamp(date_utc, 0).unwrap().naive_utc());
@@ -445,9 +449,9 @@ impl Db {
                 let local_day_ts = Local.from_local_datetime(&local_start_of_day).unwrap().timestamp();
                 
                 if local_day_ts == today_ts_local {
-                    today_rx += rx; today_tx += tx;
+                    today_rx += rx as u64; today_tx += tx as u64;
                 } else if local_day_ts == yesterday_ts_local {
-                    yest_rx += rx; yest_tx += tx;
+                    yest_rx += rx as u64; yest_tx += tx as u64;
                 }
             }
             
@@ -458,17 +462,17 @@ impl Db {
             
             while let Some(row) = d_rows.next().await? {
                 let date_utc: i64 = row.get(0)?;
-                let rx: u64 = row.get::<i64>(1)? as u64;
-                let tx: u64 = row.get::<i64>(2)? as u64;
+                let rx: i64 = row.get(1)?;
+                let tx: i64 = row.get(2)?;
                 
                 let dt_local = Local.from_utc_datetime(&chrono::DateTime::from_timestamp(date_utc, 0).unwrap().naive_utc());
                 let local_start_of_month = dt_local.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
                 let local_month_ts = Local.from_local_datetime(&local_start_of_month).unwrap().timestamp();
                 
                 if local_month_ts == this_month_ts_local {
-                    this_m_rx += rx; this_m_tx += tx;
+                    this_m_rx += rx as u64; this_m_tx += tx as u64;
                 } else if local_month_ts == last_month_ts_local {
-                    last_m_rx += rx; last_m_tx += tx;
+                    last_m_rx += rx as u64; last_m_tx += tx as u64;
                 }
             }
 
@@ -505,7 +509,7 @@ impl Db {
 
         let mut rows = conn.query(&iface_query, params![]).await?;
         let (iface_id, name, hostname, _mid) = if let Some(row) = rows.next().await? {
-            (row.get::<String>(0)?, row.get::<String>(1)?, row.get::<String>(2)?, row.get::<String>(3)?)
+            (row.get::<i64>(0)?, row.get::<String>(1)?, row.get::<String>(2)?, row.get::<String>(3)?)
         } else {
             return Err(anyhow::anyhow!("Interface not found"));
         };
@@ -524,8 +528,10 @@ impl Db {
         let mut rx = Vec::new();
         let mut tx = Vec::new();
         while let Some(row) = data_rows.next().await? {
-            rx.push(row.get::<i64>(0)? as u64);
-            tx.push(row.get::<i64>(1)? as u64);
+            let r: i64 = row.get(0)?;
+            let t: i64 = row.get(1)?;
+            rx.push(r as u64);
+            tx.push(t as u64);
         }
 
         let total_expected = ((end - begin) / 300) as usize;
@@ -572,18 +578,18 @@ mod tests {
         let iface_a = db.create_interface("eth0", 0, 0, None).await?;
         
         // Manually create interface for host B
-        let iface_b = format!("{}:eth0", host_b_id);
         db.local_conn.execute(
-            "INSERT INTO interface (id, host_id, name, created, updated) VALUES (?, ?, ?, ?, ?)",
-            (iface_b.clone(), host_b_id.clone(), "eth0", 0, 0)
+            "INSERT INTO interface (host_id, name, created, updated) VALUES (?, ?, ?, ?)",
+            (host_b_id.clone(), "eth0", 0, 0)
         ).await?;
+        let iface_b = db.local_conn.last_insert_rowid();
 
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         let old_date = now - (100 * 3600); // 100 hours ago
 
         // Add traffic for both
-        db.add_traffic(&iface_a, "fiveminute", old_date, 100, 100).await?;
-        db.add_traffic(&iface_b, "fiveminute", old_date, 200, 200).await?;
+        db.add_traffic(iface_a, "fiveminute", old_date, 100, 100).await?;
+        db.add_traffic(iface_b, "fiveminute", old_date, 200, 200).await?;
 
         // Configure retention: 5MinuteHours = 48
         let mut config = Config::default();

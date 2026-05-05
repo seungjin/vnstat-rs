@@ -647,7 +647,7 @@ async fn main() -> Result<()> {
     if let Some(alias) = cli.setalias {
         let iface = cli.iface.ok_or_else(|| anyhow::anyhow!("Please specify interface with -i to set alias"))?;
         if let Some((id, _, _, _, _)) = db.get_interface(&iface).await? {
-            db.update_interface_alias(&id, &alias).await?;
+            db.update_interface_alias(id, &alias).await?;
             println!("Alias for interface \"{}\" set to \"{}\".", iface, alias);
         } else {
             return Err(anyhow::anyhow!("Interface \"{}\" not found.", iface));
