@@ -571,16 +571,13 @@ async fn main() -> Result<()> {
                         print_95th_table(data, file_config.five_minute_hours);
                         return Ok(());
                     }
-                    Ok(IpcResponse::Info { hostname, machine_id, mac_address, version, local_schema, remote_schema }) => {
+                    Ok(IpcResponse::Info { hostname, machine_id, version, local_schema, remote_schema, .. }) => {
                         println!("vnStat-rs {} by Seungjin Kim", env!("CARGO_PKG_VERSION"));
                         println!("Daemon Host: {} ({})", hostname, machine_id);
                         println!("Daemon Version: {}", version);
                         println!("Local DB Schema: v{}", local_schema);
                         if let Some(v) = remote_schema {
                             println!("Remote DB Schema: v{}", v);
-                        }
-                        if let Some(mac) = mac_address {
-                            println!("MAC Address: {}", mac);
                         }
                         return Ok(());
                     }
@@ -677,9 +674,6 @@ async fn main() -> Result<()> {
         if let Some(ref remote) = db.remote_conn {
             let remote_schema = db.get_schema_version_from(remote).await.unwrap_or(0);
             println!("Remote DB Schema: v{}", remote_schema);
-        }
-        if let Ok(Some(mac)) = db.get_info("mac_address").await {
-            println!("MAC Address: {}", mac);
         }
         return Ok(());
     }

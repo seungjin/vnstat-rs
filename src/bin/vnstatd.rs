@@ -157,7 +157,6 @@ async fn main() -> Result<()> {
                                         }
                                     }
                                     Ok(IpcRequest::GetInfo) => {
-                                        let mac = db.get_info("mac_address").await.unwrap_or(None);
                                         let local_schema = db.get_schema_version_from(&db.local_conn).await.unwrap_or(0);
                                         let mut remote_schema = None;
                                         if let Some(ref remote) = db.remote_conn {
@@ -167,7 +166,7 @@ async fn main() -> Result<()> {
                                         IpcResponse::Info {
                                             hostname: db.hostname.clone(),
                                             machine_id: db.machine_id.clone(),
-                                            mac_address: mac,
+                                            mac_address: None,
                                             version: format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("GIT_HASH")),
                                             local_schema,
                                             remote_schema,
@@ -219,11 +218,6 @@ async fn main() -> Result<()> {
     loop {
         if let Err(e) = db_loop.update_stats(None, &file_config).await {
             eprintln!("Error updating stats: {}", e);
-        }
-
-        // Update host heartbeat
-        if let Err(e) = db_loop.update_host_last_seen().await {
-            eprintln!("Error updating host heartbeat: {}", e);
         }
 
         // Apply data retention pruning

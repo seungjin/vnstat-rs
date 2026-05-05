@@ -101,5 +101,7 @@ myservers:
     ssh 2.o "systemctl --user stop vnstatd-rs.service && systemctl --user start vnstatd-rs.service"
 
     rsync -avhz target/aarch64-unknown-linux-gnu/release/{vnstatd-rs,vnstat-rs} 1.o:~/.local/bin/
+    ssh 1.o "systemctl --user stop vnstatd-rs.service && systemctl --user start vnstatd-rs.service"
 
     rsync -avhz target/aarch64-unknown-linux-gnu/release/{vnstatd-rs,vnstat-rs} 0.o:~/.local/bin/
+    ssh 0.o "systemctl --user stop vnstatd-rs.service && systemctl --user start vnstatd-rs.service"

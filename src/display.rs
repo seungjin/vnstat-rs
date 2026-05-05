@@ -63,11 +63,11 @@ pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
             };
 
             // Monthly lines
-            let last_month_label = DateTime::from_timestamp(last_month_ts, 0).unwrap().format("%Y-%m").to_string();
+            let last_month_label = DateTime::from_timestamp(last_month_ts, 0).unwrap().with_timezone(&Local).format("%Y-%m").to_string();
             let (lm_rx, lm_tx) = summary.last_month;
             print_line(&last_month_label, lm_rx, lm_tx, None);
 
-            let this_month_label = DateTime::from_timestamp(this_month_ts, 0).unwrap().format("%Y-%m").to_string();
+            let this_month_label = DateTime::from_timestamp(this_month_ts, 0).unwrap().with_timezone(&Local).format("%Y-%m").to_string();
             let (tm_rx, tm_tx) = summary.this_month;
             
             let days_in_month = match now.month() {

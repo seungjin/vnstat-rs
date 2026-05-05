@@ -1,4 +1,4 @@
-use chrono::{Datelike, Timelike};
+use chrono::{Datelike, Timelike, Local};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct InterfaceStats {
@@ -120,7 +120,7 @@ pub struct HistoryEntry {
 
 impl JsonTimestamp {
     pub fn from_timestamp(ts: i64, include_time: bool) -> Self {
-        let dt = chrono::DateTime::from_timestamp(ts, 0).unwrap_or_default();
+        let dt = chrono::DateTime::from_timestamp(ts, 0).unwrap_or_default().with_timezone(&Local);
         Self {
             date: JsonDate {
                 year: dt.year(),
