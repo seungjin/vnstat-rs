@@ -1,4 +1,4 @@
-version = 2026050514
+version = 2026050515
 
 # Full schema for fresh installs (includes all latest columns)
 sql = """
@@ -609,4 +609,92 @@ INSERT INTO interface_type (code, name, description) VALUES (105, 'vpn', 'VPN/Tu
 INSERT INTO interface_type (code, name, description) VALUES (106, 'veth', 'Docker / Container virtual ethernet (veth*, docker*).');
 
 DROP TABLE interface_type_old;
+"""
+
+[[migrations]]
+version = 2026050515
+sql = """
+-- Re-repairing broken foreign key references in traffic resolution tables
+-- (Previous fix was reverted by the interface table rename in v2026050514)
+PRAGMA foreign_keys = OFF;
+
+-- 5-minute data
+CREATE TABLE IF NOT EXISTS fiveminute_temp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT OR IGNORE INTO fiveminute_temp SELECT * FROM fiveminute;
+DROP TABLE IF EXISTS fiveminute;
+ALTER TABLE fiveminute_temp RENAME TO fiveminute;
+
+-- Hourly data
+CREATE TABLE IF NOT EXISTS hour_temp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT OR IGNORE INTO hour_temp SELECT * FROM hour;
+DROP TABLE IF EXISTS hour;
+ALTER TABLE hour_temp RENAME TO hour;
+
+-- Daily data
+CREATE TABLE IF NOT EXISTS day_temp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT OR IGNORE INTO day_temp SELECT * FROM day;
+DROP TABLE IF EXISTS day;
+ALTER TABLE day_temp RENAME TO day;
+
+-- Monthly data
+CREATE TABLE IF NOT EXISTS month_temp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT OR IGNORE INTO month_temp SELECT * FROM month;
+DROP TABLE IF EXISTS month;
+ALTER TABLE month_temp RENAME TO month;
+
+-- Yearly data
+CREATE TABLE IF NOT EXISTS year_temp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT OR IGNORE INTO year_temp SELECT * FROM year;
+DROP TABLE IF EXISTS year;
+ALTER TABLE year_temp RENAME TO year;
+
+-- Top data
+CREATE TABLE IF NOT EXISTS top_temp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT OR IGNORE INTO top_temp SELECT * FROM top;
+DROP TABLE IF EXISTS top;
+ALTER TABLE top_temp RENAME TO top;
+
+PRAGMA foreign_keys = ON;
 """
