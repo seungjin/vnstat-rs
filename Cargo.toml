@@ -1,6 +1,6 @@
 [package]
 name = "vnstat-rs"
-version = "0.1.60"
+version = "0.1.76"
 
 edition = "2024"
 authors = ["Seungjin Kim"]
@@ -48,7 +48,7 @@ assets = [
     ["vnstat-rs", "usr/bin/vnstat-rs", "755"],
     ["vnstatd-rs", "usr/bin/vnstatd-rs", "755"],
     ["vnstatd-rs.service", "lib/systemd/system/vnstatd-rs.service", "644"],
-    ["vnstat.conf-sample", "etc/vnstat-rs.conf", "644"],
+    ["vnstat-rs.conf-sample", "etc/vnstat-rs.conf", "644"],
 ]
 maintainer-scripts = "debian"
 
@@ -57,7 +57,7 @@ assets = [
     { source = "vnstat-rs", dest = "/usr/bin/vnstat-rs", mode = "755" },
     { source = "vnstatd-rs", dest = "/usr/bin/vnstatd-rs", mode = "755" },
     { source = "vnstatd-rs.service", dest = "/usr/lib/systemd/system/vnstatd-rs.service", mode = "644" },
-    { source = "vnstat.conf-sample", dest = "/etc/vnstat-rs.conf", mode = "644", config = true },
+    { source = "vnstat-rs.conf-sample", dest = "/etc/vnstat-rs.conf", mode = "644", config = true },
 ]
 post_install = """
 if ! getent group vnstat > /dev/null; then

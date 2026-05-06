@@ -14,7 +14,7 @@ pub struct Db {
     pub remote_conn: Option<Connection>,
     pub hostname: String,
     pub machine_id: String,
-    pub host_id: String,
+    pub host_id: i64,
 }
 
 impl Db {
@@ -30,18 +30,26 @@ impl Db {
         let local_conn = local_db.connect()?;
 
         // 2. Optionally open remote database
-        let remote_conn = if let (Some(url), Some(token)) = (url, token) {
-            match Builder::new_remote(url, token).build().await {
-                Ok(remote_db) => match remote_db.connect() {
-                    Ok(conn) => Some(conn),
+        let remote_conn = if let (Some(url), Some(token)) = (url.clone(), token.clone()) {
+            if url.is_empty() {
+                None
+            } else {
+                println!("Connecting to remote database at {}...", url);
+                match Builder::new_remote(url, token).build().await {
+                    Ok(remote_db) => match remote_db.connect() {
+                        Ok(conn) => {
+                            println!("Connected to remote database.");
+                            Some(conn)
+                        },
+                        Err(e) => {
+                            eprintln!("Error: Failed to connect to remote database: {}", e);
+                            None
+                        }
+                    },
                     Err(e) => {
-                        eprintln!("Warning: Failed to connect to remote database: {}", e);
+                        eprintln!("Error: Failed to initialize remote database client: {}", e);
                         None
                     }
-                },
-                Err(e) => {
-                    eprintln!("Warning: Failed to initialize remote database client: {}", e);
-                    None
                 }
             }
         } else {
@@ -58,14 +66,11 @@ impl Db {
             remote_conn, 
             hostname, 
             machine_id, 
-            host_id: String::new() 
+            host_id: 0
         })
     }
 
     pub async fn open(path: PathBuf, url: Option<String>, token: Option<String>, hostname_override: Option<String>) -> Result<Self> {
-        if let (Some(u), _) = (&url, &token) {
-            println!("Connecting to remote database at {}...", u);
-        }
         let mut db_obj = Self::connect(path, url, token, hostname_override).await?;
         db_obj.init_schema().await?;
         db_obj.host_id = db_obj.get_or_create_host().await?;

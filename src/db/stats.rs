@@ -7,57 +7,73 @@ use libsql::params;
 use chrono::{Datelike, Local, TimeZone, Utc, Timelike};
 
 impl Db {
-    pub async fn add_traffic(&self, interface_id: i64, table: &str, date: i64, rx: u64, tx: u64) -> Result<()> {
-        let sql = format!(
+    pub async fn add_traffic(&self, interface_id: i64, interface_name: &str, table: &str, date: i64, rx: u64, tx: u64) -> Result<()> {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        
+        let local_sql = format!(
                 "INSERT INTO {} (interface, date, rx, tx) VALUES (?, ?, ?, ?)
                  ON CONFLICT(interface, date) DO UPDATE SET rx = rx + excluded.rx, tx = tx + excluded.tx",
                 table
             );
-        self.local_conn.execute(&sql, (interface_id, date, rx as i64, tx as i64)).await?;
+        self.local_conn.execute(&local_sql, (interface_id, date, rx as i64, tx as i64)).await?;
+        
+        // Update host last_seen locally
+        let _ = self.local_conn.execute("UPDATE host SET last_seen = ? WHERE machine_id = ?", (now, self.machine_id.clone())).await;
+
         if let Some(ref remote) = self.remote_conn {
-            if let Err(e) = remote.execute(&sql, (interface_id, date, rx as i64, tx as i64)).await {
+            let remote_sql = format!(
+                "INSERT INTO {table} (interface, date, rx, tx)
+                 SELECT id, ?, ?, ? FROM interface 
+                 WHERE name = ? AND host_id = (SELECT id FROM host WHERE machine_id = ?)
+                 ON CONFLICT(interface, date) DO UPDATE SET rx = rx + excluded.rx, tx = tx + excluded.tx"
+            );
+            if let Err(e) = remote.execute(&remote_sql, (date, rx as i64, tx as i64, interface_name.to_string(), self.machine_id.clone())).await {
                 eprintln!("Warning: Failed to add traffic to remote (table {}): {}", table, e);
             }
+
+            // Update host last_seen remotely
+            let _ = remote.execute("UPDATE host SET last_seen = ? WHERE machine_id = ?", (now, self.machine_id.clone())).await;
         }
         Ok(())
     }
 
-    pub async fn add_history_entry(&self, id: i64, rx_delta: u64, tx_delta: u64) -> Result<()> {
+    pub async fn add_history_entry(&self, id: i64, name: &str, rx_delta: u64, tx_delta: u64) -> Result<()> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         let dt_utc = Utc::now();
 
         let five_min = (now / 300) * 300;
-        self.add_traffic(id, "fiveminute", five_min, rx_delta, tx_delta).await?;
+        self.add_traffic(id, name, "fiveminute", five_min, rx_delta, tx_delta).await?;
 
         let hour = (now / 3600) * 3600;
-        self.add_traffic(id, "hour", hour, rx_delta, tx_delta).await?;
+        self.add_traffic(id, name, "hour", hour, rx_delta, tx_delta).await?;
 
         let day_dt = dt_utc.date_naive().and_hms_opt(0, 0, 0).unwrap();
         let day = Utc.from_local_datetime(&day_dt).unwrap().timestamp();
-        self.add_traffic(id, "day", day, rx_delta, tx_delta).await?;
+        self.add_traffic(id, name, "day", day, rx_delta, tx_delta).await?;
 
         let month_dt = dt_utc.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
         let month = Utc.from_local_datetime(&month_dt).unwrap().timestamp();
-        self.add_traffic(id, "month", month, rx_delta, tx_delta).await?;
+        self.add_traffic(id, name, "month", month, rx_delta, tx_delta).await?;
 
         let year_dt = dt_utc.date_naive().with_day(1).unwrap().with_month(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
         let year = Utc.from_local_datetime(&year_dt).unwrap().timestamp();
-        self.add_traffic(id, "year", year, rx_delta, tx_delta).await?;
+        self.add_traffic(id, name, "year", year, rx_delta, tx_delta).await?;
 
-        self.add_traffic(id, "top", day, rx_delta, tx_delta).await?;
+        self.add_traffic(id, name, "top", day, rx_delta, tx_delta).await?;
         Ok(())
     }
 
     pub async fn prune_stats(&self, config: &crate::config::Config) -> Result<()> {
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-        let host_id = self.host_id.clone();
+        let host_id = self.host_id;
 
         // 5-minute data
         let five_min_cutoff = now - (config.five_minute_hours as i64 * 3600);
         let sql5 = "DELETE FROM fiveminute WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
-        self.local_conn.execute(sql5, (five_min_cutoff, host_id.clone())).await?;
+        self.local_conn.execute(sql5, (five_min_cutoff, host_id)).await?;
         if let Some(ref remote) = self.remote_conn {
-            if let Err(e) = remote.execute(sql5, (five_min_cutoff, host_id.clone())).await {
+            let remote_sql5 = "DELETE FROM fiveminute WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = (SELECT id FROM host WHERE machine_id = ?))";
+            if let Err(e) = remote.execute(remote_sql5, (five_min_cutoff, self.machine_id.clone())).await {
                 eprintln!("Warning: Failed to prune 5-minute data on remote: {}", e);
             }
         }
@@ -65,9 +81,10 @@ impl Db {
         // Hourly data
         let hourly_cutoff = now - (config.hourly_days as i64 * 86400);
         let sqlh = "DELETE FROM hour WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
-        self.local_conn.execute(sqlh, (hourly_cutoff, host_id.clone())).await?;
+        self.local_conn.execute(sqlh, (hourly_cutoff, host_id)).await?;
         if let Some(ref remote) = self.remote_conn {
-            if let Err(e) = remote.execute(sqlh, (hourly_cutoff, host_id.clone())).await {
+            let remote_sqlh = "DELETE FROM hour WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = (SELECT id FROM host WHERE machine_id = ?))";
+            if let Err(e) = remote.execute(remote_sqlh, (hourly_cutoff, self.machine_id.clone())).await {
                 eprintln!("Warning: Failed to prune hourly data on remote: {}", e);
             }
         }
@@ -75,9 +92,10 @@ impl Db {
         // Daily data
         let daily_cutoff = now - (config.daily_days as i64 * 86400);
         let sqld = "DELETE FROM day WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
-        self.local_conn.execute(sqld, (daily_cutoff, host_id.clone())).await?;
+        self.local_conn.execute(sqld, (daily_cutoff, host_id)).await?;
         if let Some(ref remote) = self.remote_conn {
-            if let Err(e) = remote.execute(sqld, (daily_cutoff, host_id.clone())).await {
+            let remote_sqld = "DELETE FROM day WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = (SELECT id FROM host WHERE machine_id = ?))";
+            if let Err(e) = remote.execute(remote_sqld, (daily_cutoff, self.machine_id.clone())).await {
                 eprintln!("Warning: Failed to prune daily data on remote: {}", e);
             }
         }
@@ -85,9 +103,10 @@ impl Db {
         // Monthly data (approximate 30 days per month for simplicity of cutoff)
         let monthly_cutoff = now - (config.monthly_months as i64 * 30 * 86400);
         let sqlm = "DELETE FROM month WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
-        self.local_conn.execute(sqlm, (monthly_cutoff, host_id.clone())).await?;
+        self.local_conn.execute(sqlm, (monthly_cutoff, host_id)).await?;
         if let Some(ref remote) = self.remote_conn {
-            if let Err(e) = remote.execute(sqlm, (monthly_cutoff, host_id.clone())).await {
+            let remote_sqlm = "DELETE FROM month WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = (SELECT id FROM host WHERE machine_id = ?))";
+            if let Err(e) = remote.execute(remote_sqlm, (monthly_cutoff, self.machine_id.clone())).await {
                 eprintln!("Warning: Failed to prune monthly data on remote: {}", e);
             }
         }
@@ -96,16 +115,17 @@ impl Db {
         if config.yearly_years >= 0 {
             let yearly_cutoff = now - (config.yearly_years as i64 * 365 * 86400);
             let sqly = "DELETE FROM year WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
-            self.local_conn.execute(sqly, (yearly_cutoff, host_id.clone())).await?;
+            self.local_conn.execute(sqly, (yearly_cutoff, host_id)).await?;
             if let Some(ref remote) = self.remote_conn {
-                if let Err(e) = remote.execute(sqly, (yearly_cutoff, host_id.clone())).await {
+                let remote_sqly = "DELETE FROM year WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = (SELECT id FROM host WHERE machine_id = ?))";
+                if let Err(e) = remote.execute(remote_sqly, (yearly_cutoff, self.machine_id.clone())).await {
                     eprintln!("Warning: Failed to prune yearly data on remote: {}", e);
                 }
             }
         }
 
         // Top days (keep only top N entries per interface belonging to this host)
-        let mut rows = self.local_conn.query("SELECT id FROM interface WHERE host_id = ?", [host_id.clone()]).await?;
+        let mut rows = self.local_conn.query("SELECT id FROM interface WHERE host_id = ?", [host_id]).await?;
         let mut interfaces = Vec::new();
         while let Some(row) = rows.next().await? {
             let id: i64 = row.get(0)?;
@@ -118,8 +138,20 @@ impl Db {
                 )";
             self.local_conn.execute(delete_sql, (iface_id, iface_id, config.top_day_entries as i64)).await?;
             if let Some(ref remote) = self.remote_conn {
-                if let Err(e) = remote.execute(delete_sql, (iface_id, iface_id, config.top_day_entries as i64)).await {
-                    eprintln!("Warning: Failed to prune top data on remote for interface {}: {}", iface_id, e);
+                // Get name for this iface_id to resolve on remote
+                let mut name_row = self.local_conn.query("SELECT name FROM interface WHERE id = ?", [iface_id]).await?;
+                if let Some(row) = name_row.next().await? {
+                    let iface_name: String = row.get(0)?;
+                    let remote_delete_sql = format!(
+                        "DELETE FROM top WHERE interface = (SELECT id FROM interface WHERE name = ? AND host_id = (SELECT id FROM host WHERE machine_id = ?))
+                         AND date NOT IN (
+                            SELECT date FROM top WHERE interface = (SELECT id FROM interface WHERE name = ? AND host_id = (SELECT id FROM host WHERE machine_id = ?))
+                            ORDER BY (rx + tx) DESC LIMIT ?
+                         )"
+                    );
+                    if let Err(e) = remote.execute(&remote_delete_sql, (iface_name.clone(), self.machine_id.clone(), iface_name, self.machine_id.clone(), config.top_day_entries as i64)).await {
+                        eprintln!("Warning: Failed to prune top data on remote for interface {}: {}", iface_id, e);
+                    }
                 }
             }
         }
@@ -137,15 +169,18 @@ impl Db {
                     continue;
                 }
             }
-            if let Some((id, last_rx, last_tx, current_mac, updated)) = self.get_interface(&stat.name).await? {
+            // Log discovered interface
+            println!("Processing interface: {}", stat.name); 
+
+            if let Some((id, last_rx, last_tx, current_mac, updated, created, rxtotal, txtotal)) = self.get_interface(&stat.name).await? {
                 seen_ids.insert(id);
                 
                 // Mark as active if it was inactive
-                let _ = self.set_interface_active(id, true).await;
+                let _ = self.set_interface_active(id, &stat.name, true).await;
 
                 if current_mac.is_none() || current_mac.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
                     if let Some(ref new_mac) = stat.mac_address {
-                        let _ = self.update_interface_mac(id, new_mac).await;
+                        let _ = self.update_interface_mac(id, &stat.name, new_mac).await;
                     }
                 }
 
@@ -176,15 +211,19 @@ impl Db {
                 let rx_delta = calculate_delta(stat.rx_bytes, last_rx);
                 let tx_delta = calculate_delta(stat.tx_bytes, last_tx);
 
-                if rx_delta > 0 || tx_delta > 0 {
-                    println!("Updating interface {} (+{} RX, +{} TX)...", stat.name, rx_delta, tx_delta);
-                    self.update_interface_counters(id, stat.rx_bytes, stat.tx_bytes, rx_delta, tx_delta).await?;
-                    self.add_history_entry(id, rx_delta, tx_delta).await?;
+                if rx_delta > 0 || tx_delta > 0 || (now - updated) >= 300 {
+                    if rx_delta > 0 || tx_delta > 0 {
+                        println!("Updating interface {} (+{} RX, +{} TX)...", stat.name, rx_delta, tx_delta);
+                    }
+                    self.update_interface_counters(id, &stat.name, stat.rx_bytes, stat.tx_bytes, rx_delta, tx_delta, rxtotal, txtotal, created, current_mac).await?;
+                    if rx_delta > 0 || tx_delta > 0 {
+                        self.add_history_entry(id, &stat.name, rx_delta, tx_delta).await?;
+                    }
                 }
             } else {
                 let id = self.create_interface(&stat.name, stat.rx_bytes, stat.tx_bytes, stat.mac_address).await?;
                 seen_ids.insert(id);
-                self.add_history_entry(id, 0, 0).await?;
+                self.add_history_entry(id, &stat.name, 0, 0).await?;
                 println!("New interface found and registered: {} (host: {})", stat.name, self.hostname);
             }
         }
@@ -195,9 +234,9 @@ impl Db {
             for iface_stat in all_ifaces {
                 // We need the internal ID to mark inactive. 
                 // Since get_all_interface_stats doesn't return ID, we'll use a new helper or get_interface
-                if let Some((id, _, _, _, _)) = self.get_interface(&iface_stat.name).await? {
+                if let Some((id, _, _, _, _, _, _, _)) = self.get_interface(&iface_stat.name).await? {
                     if !seen_ids.contains(&id) {
-                        let _ = self.set_interface_active(id, false).await;
+                        let _ = self.set_interface_active(id, &iface_stat.name, false).await;
                     }
                 }
             }
@@ -313,10 +352,12 @@ impl Db {
             }
 
             let mut data_rows = active_conn.query(&query_str, [id]).await?;
-            
+            let mut has_data = false;
+
             if group_by_table {
                 let mut aggregated: std::collections::BTreeMap<i64, (u64, u64)> = std::collections::BTreeMap::new();
                 while let Some(row) = data_rows.next().await? {
+                    has_data = true;
                     let rx: i64 = row.get(0)?;
                     let tx: i64 = row.get(1)?;
                     let date_utc: i64 = row.get(2)?;
@@ -358,6 +399,7 @@ impl Db {
                 }
             } else {
                 while let Some(row) = data_rows.next().await? {
+                    has_data = true;
                     let date: i64 = row.get(2)?;
                     let rx: i64 = row.get(0)?;
                     let tx: i64 = row.get(1)?;
@@ -369,6 +411,17 @@ impl Db {
                         tx: tx as u64,
                     });
                 }
+            }
+
+            // If an interface has no data, add one "empty" entry so it at least appears in the list
+            if !has_data {
+                history.push(HistoryEntry {
+                    hostname: hostname.clone(),
+                    interface: name.clone(),
+                    date: 0,
+                    rx: 0,
+                    tx: 0,
+                });
             }
         }
 
@@ -434,7 +487,7 @@ impl Db {
             // and sum them according to local boundaries.
             
             // 1. Get Today/Yesterday stats from 'hour' table (UTC) and sum for Local Today/Yesterday
-            let mut h_rows = active_conn.query("SELECT date, rx, tx FROM hour WHERE interface = ? AND date >= ?", (id.clone(), yesterday_ts_local - 3600)).await?;
+            let mut h_rows = active_conn.query("SELECT date, rx, tx FROM hour WHERE interface = ? AND date >= ?", (id, yesterday_ts_local - 3600)).await?;
             let mut today_rx = 0; let mut today_tx = 0;
             let mut yest_rx = 0; let mut yest_tx = 0;
             
@@ -456,7 +509,7 @@ impl Db {
             }
             
             // 2. Get This Month / Last Month stats from 'day' table (UTC) and sum for Local Month
-            let mut d_rows = active_conn.query("SELECT date, rx, tx FROM day WHERE interface = ? AND date >= ?", (id.clone(), last_month_ts_local - 86400)).await?;
+            let mut d_rows = active_conn.query("SELECT date, rx, tx FROM day WHERE interface = ? AND date >= ?", (id, last_month_ts_local - 86400)).await?;
             let mut this_m_rx = 0; let mut this_m_tx = 0;
             let mut last_m_rx = 0; let mut last_m_tx = 0;
             
@@ -568,11 +621,12 @@ mod tests {
         let db = Db::open(db_path.clone(), None, None, Some("host-a".to_string())).await?;
         
         // Create another host manually
-        let host_b_id = "host-b-id".to_string();
+        let host_b_machine_id = "host-b-machine-id".to_string();
         db.local_conn.execute(
-            "INSERT INTO host (id, machine_id, hostname) VALUES (?, ?, ?)",
-            (host_b_id.clone(), host_b_id.clone(), "host-b")
+            "INSERT INTO host (machine_id, hostname) VALUES (?, ?)",
+            (host_b_machine_id.clone(), "host-b")
         ).await?;
+        let host_b_id = db.local_conn.last_insert_rowid();
 
         // Create interfaces
         let iface_a = db.create_interface("eth0", 0, 0, None).await?;
@@ -580,7 +634,7 @@ mod tests {
         // Manually create interface for host B
         db.local_conn.execute(
             "INSERT INTO interface (host_id, name, created, updated) VALUES (?, ?, ?, ?)",
-            (host_b_id.clone(), "eth0", 0, 0)
+            (host_b_id, "eth0", 0, 0)
         ).await?;
         let iface_b = db.local_conn.last_insert_rowid();
 
@@ -588,8 +642,8 @@ mod tests {
         let old_date = now - (100 * 3600); // 100 hours ago
 
         // Add traffic for both
-        db.add_traffic(iface_a, "fiveminute", old_date, 100, 100).await?;
-        db.add_traffic(iface_b, "fiveminute", old_date, 200, 200).await?;
+        db.add_traffic(iface_a, "eth0", "fiveminute", old_date, 100, 100).await?;
+        db.add_traffic(iface_b, "eth0", "fiveminute", old_date, 200, 200).await?;
 
         // Configure retention: 5MinuteHours = 48
         let mut config = Config::default();

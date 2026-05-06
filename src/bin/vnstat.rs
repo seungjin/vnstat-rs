@@ -262,8 +262,9 @@ struct Cli {
     dbdir: Option<PathBuf>,
 
     /// Path to config file
-    #[arg(short = 'n', long, value_name = "FILE")]
+    #[arg(short = 'c', long, value_name = "file")]
     config: Option<PathBuf>,
+
 
     /// Add interface to database
     #[arg(long, value_name = "iface")]
@@ -374,15 +375,43 @@ async fn main() -> Result<()> {
 
         // 1. Try daemon first
         let mut daemon_connected = false;
+        let mut tried_paths = Vec::new();
+
         if let Some(ref socket_path) = file_config.daemon_socket {
+            tried_paths.push(socket_path.clone());
+        }
+        
+        // Add common fallbacks if they aren't already there
+        let fallbacks = [
+            "/run/vnstat-rs.sock",
+            "/var/run/vnstat-rs.sock",
+        ];
+        for f in fallbacks {
+            let p = PathBuf::from(f);
+            if !tried_paths.contains(&p) {
+                tried_paths.push(p);
+            }
+        }
+        
+        // Add user fallback if not already there
+        let home = std::env::var("HOME").unwrap_or_default();
+        if !home.is_empty() {
+            let p = PathBuf::from(home).join(".local/share/vnstat-rs/vnstat-rs.sock");
+            if !tried_paths.contains(&p) {
+                tried_paths.push(p);
+            }
+        }
+
+        for socket_path in tried_paths {
             if socket_path.exists() {
-                if let Ok(IpcResponse::Info { version, local_schema, remote_schema, .. }) = request_daemon(socket_path, IpcRequest::GetInfo).await {
+                if let Ok(IpcResponse::Info { version, local_schema, remote_schema, .. }) = request_daemon(&socket_path, IpcRequest::GetInfo).await {
                     println!("vnStatd-rs version: {}", version);
                     println!("Local DB Schema: v{}", local_schema);
                     if let Some(v) = remote_schema {
                         println!("Remote DB Schema: v{}", v);
                     }
                     daemon_connected = true;
+                    break;
                 }
             }
         }
@@ -428,15 +457,16 @@ async fn main() -> Result<()> {
     }
 
     let is_root = unsafe { libc::getuid() == 0 };
-    let etc_config = PathBuf::from("/etc/vnstat-rs.conf");
+    let etc_config = PathBuf::from("/etc/vnstat-rs/vnstat-rs.conf");
     let home = std::env::var("HOME").unwrap_or_default();
     let user_config = PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
 
     let file_config = if let Some(ref path) = cli.config {
-        match vnstat_rs::load_config(path) {
+        let expanded_path = vnstat_rs::expand_tilde(path);
+        match vnstat_rs::load_config(&expanded_path) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("Error loading config {}: {}", path.display(), e);
+                eprintln!("Error loading config {}: {}", expanded_path.display(), e);
                 std::process::exit(1);
             }
         }
@@ -646,8 +676,8 @@ async fn main() -> Result<()> {
 
     if let Some(alias) = cli.setalias {
         let iface = cli.iface.ok_or_else(|| anyhow::anyhow!("Please specify interface with -i to set alias"))?;
-        if let Some((id, _, _, _, _)) = db.get_interface(&iface).await? {
-            db.update_interface_alias(id, &alias).await?;
+        if let Some((id, _, _, _, _, _, _, _)) = db.get_interface(&iface).await? {
+            db.update_interface_alias(id, &iface, &alias).await?;
             println!("Alias for interface \"{}\" set to \"{}\".", iface, alias);
         } else {
             return Err(anyhow::anyhow!("Interface \"{}\" not found.", iface));

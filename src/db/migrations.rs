@@ -59,12 +59,15 @@ impl Db {
     pub async fn init_schema(&self) -> Result<()> {
         let schema: Schema = toml::from_str(SCHEMA_TOML)?;
         
+        // Check current version before running schema.sql
+        let mut current_local = self.get_schema_version_from(&self.local_conn).await?;
+        let is_legacy_local = if current_local == 0 { self.is_legacy_db(&self.local_conn).await } else { false };
+
         // 1. Initial table creation (both)
         self.execute_batch(&schema.sql).await?;
 
         // 2. Handle Local Migrations
-        let mut current_local = self.get_schema_version_from(&self.local_conn).await?;
-        if current_local == 0 && self.is_legacy_db(&self.local_conn).await {
+        if current_local == 0 && is_legacy_local {
             current_local = 1; 
         }
 
@@ -77,9 +80,7 @@ impl Db {
                 for m in migrations {
                     if m.version > current_local && m.version <= schema.version {
                         println!("Applying local migration v{}...", m.version);
-                        if let Err(e) = self.local_conn.execute_batch(&m.sql).await {
-                            eprintln!("Warning: Local migration v{} failed: {}", m.version, e);
-                        }
+                        self.local_conn.execute_batch(&m.sql).await?;
                     }
                 }
             }
@@ -91,26 +92,31 @@ impl Db {
         // 3. Handle Remote Migrations (Independent of Local)
         if let Some(ref remote) = self.remote_conn {
             let mut current_remote = self.get_schema_version_from(remote).await?;
-            if current_remote == 0 && self.is_legacy_db(remote).await {
+            let is_legacy_remote = if current_remote == 0 { self.is_legacy_db(remote).await } else { false };
+
+            if current_remote == 0 && is_legacy_remote {
                 current_remote = 1;
             }
 
             if current_remote == 0 {
                 println!("Initializing fresh remote database schema (v{})...", schema.version);
-                let _ = remote.execute(&format!("INSERT INTO info (name, value) VALUES ('schema_version', '{}') ON CONFLICT(name) DO UPDATE SET value = excluded.value", schema.version), params![]).await;
+                if let Err(e) = remote.execute(&format!("INSERT INTO info (name, value) VALUES ('schema_version', '{}') ON CONFLICT(name) DO UPDATE SET value = excluded.value", schema.version), params![]).await {
+                    eprintln!("Warning: Failed to update schema version on remote: {}", e);
+                }
             } else if current_remote < schema.version {
                 println!("Migrating remote database from v{} to v{}...", current_remote, schema.version);
                 if let Some(ref migrations) = schema.migrations {
                     for m in migrations {
                         if m.version > current_remote && m.version <= schema.version {
                             println!("Applying remote migration v{}...", m.version);
-                            if let Err(e) = remote.execute_batch(&m.sql).await {
-                                eprintln!("Warning: Remote migration v{} failed: {}", m.version, e);
-                            }
+                            remote.execute_batch(&m.sql).await?;
                         }
                     }
+
                 }
-                let _ = remote.execute(&format!("INSERT INTO info (name, value) VALUES ('schema_version', '{}') ON CONFLICT(name) DO UPDATE SET value = excluded.value", schema.version), params![]).await;
+                if let Err(e) = remote.execute(&format!("INSERT INTO info (name, value) VALUES ('schema_version', '{}') ON CONFLICT(name) DO UPDATE SET value = excluded.value", schema.version), params![]).await {
+                    eprintln!("Warning: Failed to update schema version on remote: {}", e);
+                }
             } else {
                 println!("Remote database schema is up-to-date (v{}).", current_remote);
             }

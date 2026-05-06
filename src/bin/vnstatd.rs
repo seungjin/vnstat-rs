@@ -10,11 +10,15 @@ use std::fs;
 use vnstat_rs::{Db, IpcRequest, IpcResponse};
 
 #[derive(Parser)]
-#[command(author, version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), ")"), about = "A Rust port of vnStat daemon", long_about = None)]
+#[command(author, about = "A Rust port of vnStat daemon", long_about = None)]
 struct Cli {
     /// Start as daemon
     #[arg(short, long)]
     daemon: bool,
+
+    /// Show version
+    #[arg(short = 'V', long = "version")]
+    version: bool,
 
     /// Pid file
     #[arg(short, long, value_name = "file")]
@@ -33,7 +37,7 @@ struct Cli {
     group: Option<String>,
 
     /// Path to config file
-    #[arg(short, long, value_name = "file")]
+    #[arg(short = 'c', long, value_name = "file")]
     config: Option<PathBuf>,
 
     /// Initialize database and exit
@@ -58,11 +62,32 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    if cli.version {
+        println!("vnstatd-rs {} ({})", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
+        
+        let file_config = if let Some(ref path) = cli.config {
+            vnstat_rs::load_config(path).unwrap_or_else(|_| vnstat_rs::load_best_config())
+        } else {
+            vnstat_rs::load_best_config()
+        };
+
+        let db_path = file_config.database.clone().unwrap_or_else(|| PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
+        
+        if db_path.exists() {
+            if let Ok(db) = Db::open_no_init(db_path, file_config.url.clone(), file_config.token.clone()).await {
+                let local_schema = db.get_schema_version_from(&db.local_conn).await.unwrap_or(0);
+                println!("Local DB Schema: v{}", local_schema);
+            }
+        }
+        return Ok(());
+    }
+
     let file_config = if let Some(ref path) = cli.config {
-        match vnstat_rs::load_config(path) {
+        let expanded_path = vnstat_rs::expand_tilde(path);
+        match vnstat_rs::load_config(&expanded_path) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("Error loading config {}: {}", path.display(), e);
+                eprintln!("Error loading config {}: {}", expanded_path.display(), e);
                 std::process::exit(1);
             }
         }
@@ -77,6 +102,11 @@ async fn main() -> Result<()> {
     let token = file_config.token.clone();
 
     let db = Db::open(db_path, url, token, file_config.hostname_override.clone()).await? ;
+    if db.remote_conn.is_some() {
+        println!("Remote synchronization enabled.");
+    } else {
+        println!("Remote synchronization disabled (no LibsqlUrl/Token configured).");
+    }
     println!("Reporting version {} to database...", concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_HASH"), ")"));
 
     if cli.initdb {

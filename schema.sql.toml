@@ -1,20 +1,21 @@
-version = 2026050505
+version = 2026050509
 
 # Full schema for fresh installs (includes all latest columns)
 sql = """
 -- Host table
 CREATE TABLE IF NOT EXISTS host (
-    id           TEXT PRIMARY KEY,
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
     machine_id   TEXT UNIQUE NOT NULL,
     hostname     TEXT NOT NULL,
     version      TEXT,
-    started      INTEGER
+    started      INTEGER,
+    last_seen    INTEGER
 );
 
 -- Interface table
 CREATE TABLE IF NOT EXISTS interface (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    host_id      TEXT NOT NULL REFERENCES host(id) ON DELETE CASCADE,
+    host_id      INTEGER NOT NULL REFERENCES host(id) ON DELETE CASCADE,
     name         TEXT NOT NULL,
     alias        TEXT,
     mac_address  TEXT,
@@ -142,6 +143,7 @@ ALTER TABLE top DROP COLUMN host_id;
 [[migrations]]
 version = 2026050505
 sql = """
+PRAGMA foreign_keys = OFF;
 -- Rename old tables
 ALTER TABLE interface RENAME TO interface_old;
 ALTER TABLE fiveminute RENAME TO fiveminute_old;
@@ -247,4 +249,234 @@ DROP TABLE day_old;
 DROP TABLE month_old;
 DROP TABLE year_old;
 DROP TABLE top_old;
+PRAGMA foreign_keys = ON;
+"""
+
+[[migrations]]
+version = 2026050506
+sql = """
+PRAGMA foreign_keys = OFF;
+-- Normalizing host table (id)
+-- 1. Rename host table
+ALTER TABLE host RENAME TO host_old;
+
+-- 2. Create new host table with INTEGER PRIMARY KEY
+CREATE TABLE host (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    machine_id   TEXT UNIQUE NOT NULL,
+    hostname     TEXT NOT NULL,
+    version      TEXT,
+    started      INTEGER
+);
+
+-- 3. Copy data to new host table
+INSERT INTO host (machine_id, hostname, version, started)
+SELECT machine_id, hostname, version, started FROM host_old;
+
+-- 4. Recreate interface table with INTEGER host_id
+ALTER TABLE interface RENAME TO interface_old;
+
+CREATE TABLE interface (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id      INTEGER NOT NULL REFERENCES host(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL,
+    alias        TEXT,
+    mac_address  TEXT,
+    active       INTEGER NOT NULL DEFAULT 1,
+    created      INTEGER NOT NULL,
+    updated      INTEGER NOT NULL,
+    rxcounter    INTEGER NOT NULL DEFAULT 0,
+    txcounter    INTEGER NOT NULL DEFAULT 0,
+    rxtotal      INTEGER NOT NULL DEFAULT 0,
+    txtotal      INTEGER NOT NULL DEFAULT 0,
+    CONSTRAINT u_host_name UNIQUE(host_id, name)
+);
+
+-- 5. Copy interface data, joining with new host table to get the new INTEGER host_id
+INSERT INTO interface (id, host_id, name, alias, mac_address, active, created, updated, rxcounter, txcounter, rxtotal, txtotal)
+SELECT i.id, h.id, i.name, i.alias, i.mac_address, i.active, i.created, i.updated, i.rxcounter, i.txcounter, i.rxtotal, i.txtotal
+FROM interface_old i
+JOIN host h ON i.host_id = h.machine_id;
+
+-- 6. Drop old tables
+DROP TABLE host_old;
+DROP TABLE interface_old;
+PRAGMA foreign_keys = ON;
+"""
+
+[[migrations]]
+version = 2026050507
+sql = """
+-- Recovery from failed host normalization (v2026050506)
+PRAGMA foreign_keys = OFF;
+
+-- Ensure source tables exist so SELECT doesn't fail if they were already dropped by 06
+CREATE TABLE IF NOT EXISTS host_old (machine_id TEXT, hostname TEXT, version TEXT, started INTEGER);
+CREATE TABLE IF NOT EXISTS host (machine_id TEXT, hostname TEXT, version TEXT, started INTEGER);
+CREATE TABLE IF NOT EXISTS interface_old (
+    id INTEGER, host_id TEXT, name TEXT, alias TEXT, mac_address TEXT, 
+    active INTEGER, created INTEGER, updated INTEGER, rxcounter INTEGER, 
+    txcounter INTEGER, rxtotal INTEGER, txtotal INTEGER
+);
+CREATE TABLE IF NOT EXISTS interface (
+    id INTEGER, host_id TEXT, name TEXT, alias TEXT, mac_address TEXT, 
+    active INTEGER, created INTEGER, updated INTEGER, rxcounter INTEGER, 
+    txcounter INTEGER, rxtotal INTEGER, txtotal INTEGER
+);
+
+-- Create temp tables with correct schema
+CREATE TABLE IF NOT EXISTS host_temp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    machine_id   TEXT UNIQUE NOT NULL,
+    hostname     TEXT NOT NULL,
+    version      TEXT,
+    started      INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS interface_temp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id      INTEGER NOT NULL REFERENCES host_temp(id) ON DELETE CASCADE,
+    name         TEXT NOT NULL,
+    alias        TEXT,
+    mac_address  TEXT,
+    active       INTEGER NOT NULL DEFAULT 1,
+    created      INTEGER NOT NULL,
+    updated      INTEGER NOT NULL,
+    rxcounter    INTEGER NOT NULL DEFAULT 0,
+    txcounter    INTEGER NOT NULL DEFAULT 0,
+    rxtotal      INTEGER NOT NULL DEFAULT 0,
+    txtotal      INTEGER NOT NULL DEFAULT 0,
+    CONSTRAINT u_host_name UNIQUE(host_id, name)
+);
+
+-- Copy host data from all possible sources
+INSERT OR IGNORE INTO host_temp (machine_id, hostname)
+SELECT machine_id, hostname FROM host WHERE machine_id IS NOT NULL;
+
+INSERT OR IGNORE INTO host_temp (machine_id, hostname)
+SELECT machine_id, hostname FROM host_old WHERE machine_id IS NOT NULL;
+
+-- Copy interface data from all possible sources
+-- We join with host_temp to get the new integer host_id.
+INSERT OR IGNORE INTO interface_temp (id, host_id, name, alias, mac_address, active, created, updated, rxcounter, txcounter, rxtotal, txtotal)
+SELECT i.id, h.id, i.name, i.alias, i.mac_address, i.active, i.created, i.updated, i.rxcounter, i.txcounter, i.rxtotal, i.txtotal
+FROM interface i
+JOIN host_temp h ON (i.host_id = h.machine_id OR i.host_id = CAST(h.id AS TEXT) OR i.host_id = h.id)
+WHERE i.id IS NOT NULL;
+
+INSERT OR IGNORE INTO interface_temp (id, host_id, name, alias, mac_address, active, created, updated, rxcounter, txcounter, rxtotal, txtotal)
+SELECT i.id, h.id, i.name, i.alias, i.mac_address, i.active, i.created, i.updated, i.rxcounter, i.txcounter, i.rxtotal, i.txtotal
+FROM interface_old i
+JOIN host_temp h ON (i.host_id = h.machine_id OR i.host_id = CAST(h.id AS TEXT) OR i.host_id = h.id)
+WHERE i.id IS NOT NULL;
+
+-- Final swap
+DROP TABLE IF EXISTS host;
+DROP TABLE IF EXISTS host_old;
+ALTER TABLE host_temp RENAME TO host;
+
+DROP TABLE IF EXISTS interface;
+DROP TABLE IF EXISTS interface_old;
+ALTER TABLE interface_temp RENAME TO interface;
+
+PRAGMA foreign_keys = ON;
+"""
+
+[[migrations]]
+version = 2026050508
+sql = """
+-- Repairing broken foreign key references in traffic resolution tables
+PRAGMA foreign_keys = OFF;
+
+-- 5-minute data
+CREATE TABLE IF NOT EXISTS fiveminute_temp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT OR IGNORE INTO fiveminute_temp SELECT * FROM fiveminute;
+DROP TABLE IF EXISTS fiveminute;
+ALTER TABLE fiveminute_temp RENAME TO fiveminute;
+
+-- Hourly data
+CREATE TABLE IF NOT EXISTS hour_temp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT OR IGNORE INTO hour_temp SELECT * FROM hour;
+DROP TABLE IF EXISTS hour;
+ALTER TABLE hour_temp RENAME TO hour;
+
+-- Daily data
+CREATE TABLE IF NOT EXISTS day_temp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT OR IGNORE INTO day_temp SELECT * FROM day;
+DROP TABLE IF EXISTS day;
+ALTER TABLE day_temp RENAME TO day;
+
+-- Monthly data
+CREATE TABLE IF NOT EXISTS month_temp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT OR IGNORE INTO month_temp SELECT * FROM month;
+DROP TABLE IF EXISTS month;
+ALTER TABLE month_temp RENAME TO month;
+
+-- Yearly data
+CREATE TABLE IF NOT EXISTS year_temp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT OR IGNORE INTO year_temp SELECT * FROM year;
+DROP TABLE IF EXISTS year;
+ALTER TABLE year_temp RENAME TO year;
+
+-- Top data
+CREATE TABLE IF NOT EXISTS top_temp (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    interface    INTEGER REFERENCES interface(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    rx           INTEGER NOT NULL,
+    tx           INTEGER NOT NULL,
+    CONSTRAINT u UNIQUE (interface, date)
+);
+INSERT OR IGNORE INTO top_temp SELECT * FROM top;
+DROP TABLE IF EXISTS top;
+ALTER TABLE top_temp RENAME TO top;
+
+PRAGMA foreign_keys = ON;
+"""
+
+[[migrations]]
+version = 2026050509
+sql = """
+-- Adding precise last_seen to host table
+ALTER TABLE host ADD COLUMN last_seen INTEGER;
+
+-- Initialize it from existing traffic data if possible
+UPDATE host SET last_seen = (
+    SELECT MAX(date) FROM fiveminute WHERE interface IN (SELECT id FROM interface WHERE host_id = host.id)
+);
 """

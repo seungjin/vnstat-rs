@@ -21,6 +21,7 @@ pub struct Config {
 }
 
 pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
+    println!("Loading config from {:?}...", path);
     let mut config = Config {
         update_interval: 30,
         sync_interval: 300,
@@ -147,27 +148,32 @@ pub fn get_default_config(is_root: bool) -> Config {
 
 pub fn load_best_config() -> Config {
     let is_root = unsafe { libc::getuid() == 0 };
-    let etc_config = PathBuf::from("/etc/vnstat-rs.conf");
+    let etc_config = PathBuf::from("/etc/vnstat-rs/vnstat-rs.conf");
     let home = std::env::var("HOME").unwrap_or_default();
     let user_config = PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
+    let local_config = PathBuf::from("vnstat-rs.conf");
 
-    match load_config(&etc_config) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            match load_config(&user_config) {
-                Ok(c) => c,
-                Err(_) => get_default_config(is_root)
-            }
-        }
-        Err(_) => {
-            if !is_root {
-                match load_config(&user_config) {
-                    Ok(c) => c,
-                    Err(_) => get_default_config(is_root)
-                }
-            } else {
-                get_default_config(is_root)
-            }
+    // 1. Try /etc/vnstat-rs/vnstat-rs.conf
+    if etc_config.exists() {
+        if let Ok(c) = load_config(&etc_config) {
+            return c;
         }
     }
+
+    // 2. Try ~/.config/vnstat-rs/vnstat-rs.conf
+    if user_config.exists() {
+        if let Ok(c) = load_config(&user_config) {
+            return c;
+        }
+    }
+
+    // 3. Try current directory (convenient for testing)
+    if local_config.exists() {
+        if let Ok(c) = load_config(&local_config) {
+            return c;
+        }
+    }
+
+    println!("No config file found. Using defaults.");
+    get_default_config(is_root)
 }

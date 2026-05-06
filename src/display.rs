@@ -165,6 +165,9 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
             let mut last_date = String::new();
 
             for entry in entries {
+                if entry.date == 0 {
+                    continue; // Skip the filler entry used for interface discovery
+                }
                 let dt_utc = DateTime::from_timestamp(entry.date, 0).unwrap();
                 let dt = dt_utc.with_timezone(&Local);
                 let date_str = dt.format("%Y-%m-%d").to_string();
@@ -500,6 +503,46 @@ mod tests {
     }
 }
 
+pub fn format_relative_time(ts: i64) -> String {
+    if ts <= 0 {
+        return "never".to_string();
+    }
+
+    let now = Local::now().timestamp();
+    let diff = now - ts;
+
+    if diff < 0 {
+        return "in the future".to_string();
+    }
+
+    if diff < 60 {
+        return "< 1m ago".to_string();
+    }
+
+    let mins = diff / 60;
+    if mins < 60 {
+        return format!("{}m ago", mins);
+    }
+
+    let hours = mins / 60;
+    if hours < 24 {
+        return format!("{}h ago", hours);
+    }
+
+    let days = hours / 24;
+    if days < 30 {
+        return format!("{}d ago", days);
+    }
+
+    let months = days / 30;
+    if months < 12 {
+        return format!("{}mo ago", months);
+    }
+
+    let years = days / 365;
+    format!("{}y ago", years)
+}
+
 pub fn print_hosts_table(hosts: Vec<(String, String, Option<String>, Option<i64>, Option<i64>)>) {
     if hosts.is_empty() {
         println!("No hosts found.");
@@ -522,10 +565,10 @@ pub fn print_hosts_table(hosts: Vec<(String, String, Option<String>, Option<i64>
     name_width = name_width.max(header_name.len());
     ver_width = ver_width.max(header_ver.len());
 
-    println!("{:<nw$}   {:<vw$}   {:<19}   {:<19}", 
+    println!("{:<nw$}   {:<vw$}   {:<19}   {:<15}", 
         header_name, header_ver, header_started, header_last, 
         nw = name_width, vw = ver_width);
-    println!("{:-<total_w$}", "", total_w = name_width + ver_width + 19 + 19 + 9);
+    println!("{:-<total_w$}", "", total_w = name_width + ver_width + 19 + 15 + 9);
 
     for (name, _id, ver, started, last_seen) in hosts {
         let started_str = started.map(|ts| {
@@ -533,12 +576,9 @@ pub fn print_hosts_table(hosts: Vec<(String, String, Option<String>, Option<i64>
             dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string()
         }).unwrap_or_else(|| "unknown".to_string());
 
-        let last_seen_str = last_seen.map(|ts| {
-            let dt = DateTime::from_timestamp(ts, 0).unwrap();
-            dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string()
-        }).unwrap_or_else(|| "unknown".to_string());
+        let last_seen_str = last_seen.map(format_relative_time).unwrap_or_else(|| "never".to_string());
 
-        println!("{:<nw$}   {:<vw$}   {:<19}   {:<19}", 
+        println!("{:<nw$}   {:<vw$}   {:<19}   {:<15}", 
             name, ver.unwrap_or_else(|| "unknown".to_string()), started_str, last_seen_str,
             nw = name_width, vw = ver_width);
     }
