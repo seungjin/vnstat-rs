@@ -483,7 +483,7 @@ impl Db {
         // If not filtering, mark interfaces not seen in this pass as inactive
         if filter_iface.is_none() {
             let all_ifaces = self
-                .get_all_interface_stats(None, Some(&self.machine_id), None)
+                .get_all_interface_stats(None, Some(&self.machine_id), None, false)
                 .await?;
             for iface_stat in all_ifaces {
                 // We need the internal ID to mark inactive.
@@ -508,6 +508,7 @@ impl Db {
         filter_iface: Option<&str>,
         filter_host: Option<&str>,
         filter_type: Option<u8>,
+        active_only: bool,
     ) -> Result<Vec<InterfaceStats>> {
         let conn =
             if filter_host.is_none() || filter_host != Some(&self.machine_id) {
@@ -533,6 +534,10 @@ impl Db {
 
         if let Some(t) = filter_type {
             ifaces_query.push_str(&format!(" AND i.interface_type = {} ", t));
+        }
+
+        if active_only {
+            ifaces_query.push_str(" AND i.active = 1 ");
         }
 
         let mut rows = conn.query(&ifaces_query, params![]).await?;
@@ -571,6 +576,7 @@ impl Db {
         filter_iface: Option<&str>,
         filter_host: Option<&str>,
         filter_type: Option<u8>,
+        active_only: bool,
         limit: usize,
         begin: Option<i64>,
         end: Option<i64>,
@@ -597,6 +603,10 @@ impl Db {
 
         if let Some(t) = filter_type {
             ifaces_query.push_str(&format!(" AND i.interface_type = {}", t));
+        }
+
+        if active_only {
+            ifaces_query.push_str(" AND i.active = 1");
         }
 
         let mut iface_rows = conn.query(&ifaces_query, params![]).await?;
@@ -772,6 +782,7 @@ impl Db {
         filter_iface: Option<&str>,
         filter_host: Option<&str>,
         filter_type: Option<u8>,
+        active_only: bool,
     ) -> Result<Vec<SummaryData>> {
         // For all-hosts, we must query remote to get other hosts
         let conn =
@@ -795,6 +806,10 @@ impl Db {
 
         if let Some(t) = filter_type {
             ifaces_query.push_str(&format!(" AND i.interface_type = {}", t));
+        }
+
+        if active_only {
+            ifaces_query.push_str(" AND i.active = 1");
         }
 
         ifaces_query.push_str(" ORDER BY h.hostname, i.name");
@@ -951,6 +966,7 @@ impl Db {
         filter_iface: Option<&str>,
         filter_host: Option<&str>,
         filter_type: Option<u8>,
+        active_only: bool,
     ) -> Result<NintyFifthData> {
         let conn =
             if filter_host.is_none() || filter_host != Some(&self.machine_id) {
@@ -972,6 +988,10 @@ impl Db {
         }
         if let Some(t) = filter_type {
             iface_query.push_str(&format!(" AND i.interface_type = {}", t));
+        }
+
+        if active_only {
+            iface_query.push_str(" AND i.active = 1");
         }
 
         // Prioritize active interfaces with the most total traffic

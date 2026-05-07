@@ -219,6 +219,10 @@ struct Cli {
     #[arg(long)]
     all_hosts: bool,
 
+    /// Show all interfaces (including inactive ones)
+    #[arg(long)]
+    all_interfaces: bool,
+
     /// List all hosts in database
     #[arg(long)]
     host_list: bool,
@@ -350,6 +354,7 @@ fn print_help() {
     println!("      --oneline [mode]             show simple parsable format");
     println!("      --json [mode] [limit]        show database in json format");
     println!("      --xml [mode] [limit]         show database in xml format");
+    println!("      --all-interfaces             show all interfaces");
     println!();
     println!("      -tr, --tr [time]             calculate traffic");
     println!(
@@ -377,6 +382,7 @@ fn print_longhelp() {
     println!("      --oneline [mode]             show simple parsable format");
     println!("      --json [mode] [limit]        show database in json format");
     println!("      --xml [mode] [limit]         show database in xml format");
+    println!("      --all-interfaces             show all interfaces (including inactive)");
     println!();
     println!("Modify:");
     println!("      --add <iface>                add interface to database");
@@ -612,6 +618,8 @@ async fn main() -> Result<()> {
         cli.host.clone().or_else(|| current_machine_id.clone())
     };
 
+    let active_only = !cli.all_interfaces;
+
     // Try to talk to daemon first
     if let Some(ref socket_path) = file_config.daemon_socket {
         if socket_path.exists() {
@@ -635,6 +643,7 @@ async fn main() -> Result<()> {
                     interface: cli.iface.clone(),
                     host: host_filter_ipc.clone(),
                     filter_type,
+                    active_only,
                     limit: 24,
                     begin: None,
                     end: None,
@@ -644,6 +653,7 @@ async fn main() -> Result<()> {
                     interface: cli.iface.clone(),
                     host: host_filter_ipc.clone(),
                     filter_type,
+                    active_only,
                 })
             } else if cli.fiveminutes.is_some()
                 || cli.hours.is_some()
@@ -677,6 +687,7 @@ async fn main() -> Result<()> {
                     interface: cli.iface.clone(),
                     host: host_filter_ipc.clone(),
                     filter_type,
+                    active_only,
                     limit,
                     begin,
                     end,
@@ -687,12 +698,14 @@ async fn main() -> Result<()> {
                         interface: cli.iface.clone(),
                         host: host_filter_ipc.clone(),
                         filter_type,
+                        active_only,
                     })
                 } else {
                     Some(IpcRequest::GetStats {
                         interface: cli.iface.clone(),
                         host: host_filter_ipc.clone(),
                         filter_type,
+                        active_only,
                     })
                 }
             } else {
@@ -982,7 +995,7 @@ async fn main() -> Result<()> {
 
     if cli.nintyfifth {
         let data = db
-            .get_95th_data(cli.iface.as_deref(), final_host_filter, filter_type)
+            .get_95th_data(cli.iface.as_deref(), final_host_filter, filter_type, active_only)
             .await?;
         print_95th_table(data, file_config.five_minute_hours);
         return Ok(());
@@ -995,6 +1008,7 @@ async fn main() -> Result<()> {
                 cli.iface.as_deref(),
                 final_host_filter,
                 filter_type,
+                active_only,
                 24,
                 None,
                 None,
@@ -1036,6 +1050,7 @@ async fn main() -> Result<()> {
                 cli.iface.as_deref(),
                 final_host_filter,
                 filter_type,
+                active_only,
                 limit,
                 begin,
                 end,
@@ -1084,6 +1099,7 @@ async fn main() -> Result<()> {
                 cli.iface.as_deref(),
                 final_host_filter,
                 filter_type,
+                active_only,
             )
             .await?;
         stats.retain(|s| s.rx_bytes + s.tx_bytes > 0);
@@ -1124,7 +1140,7 @@ async fn main() -> Result<()> {
 
     // Default Table view (vnstat summary)
     let summaries = db
-        .get_summary(cli.iface.as_deref(), final_host_filter, filter_type)
+        .get_summary(cli.iface.as_deref(), final_host_filter, filter_type, active_only)
         .await?;
     print_summary_table(summaries, &db.machine_id);
 

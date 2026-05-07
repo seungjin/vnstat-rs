@@ -209,12 +209,14 @@ async fn main() -> Result<()> {
                                         interface,
                                         host,
                                         filter_type,
+                                        active_only,
                                     }) => {
                                         match db
                                             .get_all_interface_stats(
                                                 interface.as_deref(),
                                                 host.as_deref(),
                                                 filter_type,
+                                                active_only,
                                             )
                                             .await
                                         {
@@ -238,11 +240,12 @@ async fn main() -> Result<()> {
                                         interface,
                                         host,
                                         filter_type,
+                                        active_only,
                                         limit,
                                         begin,
                                         end,
                                     }) => {
-                                        match db.get_history(&table, interface.as_deref(), host.as_deref(), filter_type, limit, begin, end).await {
+                                        match db.get_history(&table, interface.as_deref(), host.as_deref(), filter_type, active_only, limit, begin, end).await {
                                             Ok(history) => IpcResponse::History {
                                                 history,
                                                 load_average: vnstat_rs::get_load_average().ok(),
@@ -255,12 +258,14 @@ async fn main() -> Result<()> {
                                         interface,
                                         host,
                                         filter_type,
+                                        active_only,
                                     }) => {
                                         match db
                                             .get_summary(
                                                 interface.as_deref(),
                                                 host.as_deref(),
                                                 filter_type,
+                                                active_only,
                                             )
                                             .await
                                         {
@@ -341,12 +346,14 @@ async fn main() -> Result<()> {
                                         interface,
                                         host,
                                         filter_type,
+                                        active_only,
                                     }) => {
                                         match db
                                             .get_95th_data(
                                                 interface.as_deref(),
                                                 host.as_deref(),
                                                 filter_type,
+                                                active_only,
                                             )
                                             .await
                                         {

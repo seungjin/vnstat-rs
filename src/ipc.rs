@@ -8,12 +8,14 @@ pub enum IpcRequest {
         interface: Option<String>,
         host: Option<String>,
         filter_type: Option<u8>,
+        active_only: bool,
     },
     GetHistory {
         table: String,
         interface: Option<String>,
         host: Option<String>,
         filter_type: Option<u8>,
+        active_only: bool,
         limit: usize,
         begin: Option<i64>,
         end: Option<i64>,
@@ -22,6 +24,7 @@ pub enum IpcRequest {
         interface: Option<String>,
         host: Option<String>,
         filter_type: Option<u8>,
+        active_only: bool,
     },
     GetInfo,
     GetConfig {
@@ -38,6 +41,7 @@ pub enum IpcRequest {
         interface: Option<String>,
         host: Option<String>,
         filter_type: Option<u8>,
+        active_only: bool,
     },
 }
 
