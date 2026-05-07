@@ -63,62 +63,68 @@ impl Db {
         let mut current_local = self.get_schema_version_from(&self.local_conn).await?;
         let is_legacy_local = if current_local == 0 { self.is_legacy_db(&self.local_conn).await } else { false };
 
-        // 1. Initial table creation (both)
-        self.execute_batch(&schema.sql).await?;
-
-        // 2. Handle Local Migrations
-        if current_local == 0 && is_legacy_local {
-            current_local = 1; 
-        }
-
-        if current_local == 0 {
+        // 1. Initial table creation or Migrations
+        if current_local == 0 && !is_legacy_local {
+            // Fresh install: Run the full schema SQL
+            self.execute_batch(&schema.sql).await?;
             println!("Initializing fresh local database schema (v{})...", schema.version);
             let _ = self.set_info_local("schema_version", &schema.version.to_string()).await;
-        } else if current_local < schema.version {
-            println!("Migrating local database from v{} to v{}...", current_local, schema.version);
-            if let Some(ref migrations) = schema.migrations {
-                for m in migrations {
-                    if m.version > current_local && m.version <= schema.version {
-                        println!("Applying local migration v{}...", m.version);
-                        self.local_conn.execute_batch(&m.sql).await?;
+        } else {
+            // Existing install: Run migrations only
+            if current_local == 0 && is_legacy_local {
+                current_local = 1; 
+            }
+
+            if current_local < schema.version {
+                println!("Migrating local database from v{} to v{}...", current_local, schema.version);
+                if let Some(ref migrations) = schema.migrations {
+                    for m in migrations {
+                        if m.version > current_local && m.version <= schema.version {
+                            println!("Applying local migration v{}...", m.version);
+                            self.local_conn.execute_batch(&m.sql).await?;
+                        }
                     }
                 }
+                let _ = self.set_info_local("schema_version", &schema.version.to_string()).await;
+            } else {
+                println!("Local database schema is up-to-date (v{}).", current_local);
             }
-            let _ = self.set_info_local("schema_version", &schema.version.to_string()).await;
-        } else {
-            println!("Local database schema is up-to-date (v{}).", current_local);
         }
 
-        // 3. Handle Remote Migrations (Independent of Local)
+        // 2. Handle Remote Migrations (Independent of Local)
         if let Some(ref remote) = self.remote_conn {
             let mut current_remote = self.get_schema_version_from(remote).await?;
             let is_legacy_remote = if current_remote == 0 { self.is_legacy_db(remote).await } else { false };
 
-            if current_remote == 0 && is_legacy_remote {
-                current_remote = 1;
-            }
-
-            if current_remote == 0 {
+            if current_remote == 0 && !is_legacy_remote {
+                // Fresh install on remote
+                remote.execute_batch(&schema.sql).await?;
                 println!("Initializing fresh remote database schema (v{})...", schema.version);
                 if let Err(e) = remote.execute(&format!("INSERT INTO info (name, value) VALUES ('schema_version', '{}') ON CONFLICT(name) DO UPDATE SET value = excluded.value", schema.version), params![]).await {
                     eprintln!("Warning: Failed to update schema version on remote: {}", e);
                 }
-            } else if current_remote < schema.version {
-                println!("Migrating remote database from v{} to v{}...", current_remote, schema.version);
-                if let Some(ref migrations) = schema.migrations {
-                    for m in migrations {
-                        if m.version > current_remote && m.version <= schema.version {
-                            println!("Applying remote migration v{}...", m.version);
-                            remote.execute_batch(&m.sql).await?;
-                        }
-                    }
-
-                }
-                if let Err(e) = remote.execute(&format!("INSERT INTO info (name, value) VALUES ('schema_version', '{}') ON CONFLICT(name) DO UPDATE SET value = excluded.value", schema.version), params![]).await {
-                    eprintln!("Warning: Failed to update schema version on remote: {}", e);
-                }
             } else {
-                println!("Remote database schema is up-to-date (v{}).", current_remote);
+                if current_remote == 0 && is_legacy_remote {
+                    current_remote = 1;
+                }
+
+                if current_remote < schema.version {
+                    println!("Migrating remote database from v{} to v{}...", current_remote, schema.version);
+                    if let Some(ref migrations) = schema.migrations {
+                        for m in migrations {
+                            if m.version > current_remote && m.version <= schema.version {
+                                println!("Applying remote migration v{}...", m.version);
+                                remote.execute_batch(&m.sql).await?;
+                            }
+                        }
+
+                    }
+                    if let Err(e) = remote.execute(&format!("INSERT INTO info (name, value) VALUES ('schema_version', '{}') ON CONFLICT(name) DO UPDATE SET value = excluded.value", schema.version), params![]).await {
+                        eprintln!("Warning: Failed to update schema version on remote: {}", e);
+                    }
+                } else {
+                    println!("Remote database schema is up-to-date (v{}).", current_remote);
+                }
             }
         }
 

@@ -36,32 +36,47 @@ async fn run_live(iface: Option<String>) -> Result<()> {
         stats.iter().find(|s| s.name == filter).map(|s| s.name.clone())
             .ok_or_else(|| anyhow::anyhow!("Interface \"{}\" not found.", filter))?
     } else {
-        // Find first interface with traffic, excluding lo
-        let found = stats.iter()
-            .filter(|s| s.name != "lo" && (s.rx_bytes > 0 || s.tx_bytes > 0))
-            .map(|s| s.name.clone())
-            .next();
+        // Priority selection:
+        // 1. Physical interfaces (< 100) with traffic
+        // 2. Any physical interface
+        // 3. Virtual interfaces (>= 100, but not 101) with traffic
+        // 4. Any virtual interface (not 101)
+        // 5. lo (101) with traffic
+        // 6. lo
+        
+        let mut sorted_stats = stats.clone();
+        sorted_stats.sort_by(|a, b| {
+            let a_type = a.interface_type.unwrap_or(0);
+            let b_type = b.interface_type.unwrap_or(0);
+            let a_has_traffic = a.rx_bytes > 0 || a.tx_bytes > 0;
+            let b_has_traffic = b.rx_bytes > 0 || b.tx_bytes > 0;
             
-        match found {
-            Some(name) => name,
-            None => {
-                // Fallback to first non-lo
-                stats.iter().find(|s| s.name != "lo").map(|s| s.name.clone())
-                    .unwrap_or_else(|| {
-                        if stats.is_empty() {
-                            "eth0".to_string() // Very last resort fallback
-                        } else {
-                            stats[0].name.clone()
-                        }
-                    })
-            }
-        }
+            let score = |itype: u8, has_traffic: bool| -> i32 {
+                if itype < 100 {
+                    if has_traffic { 0 } else { 1 }
+                } else if itype != 101 {
+                    if has_traffic { 2 } else { 3 }
+                } else {
+                    if has_traffic { 4 } else { 5 }
+                }
+            };
+            
+            score(a_type, a_has_traffic).cmp(&score(b_type, b_has_traffic))
+        });
+        
+        sorted_stats.first()
+            .map(|s| s.name.clone())
+            .ok_or_else(|| anyhow::anyhow!("No network interfaces found."))?
     };
 
-    println!("Monitoring {}...    (press CTRL-C to stop)", selected_iface);
+    let selected_stats = stats.iter().find(|s| s.name == selected_iface).unwrap();
+    println!("Monitoring {} ({}) ...    (press CTRL-C to stop)", 
+        selected_iface, 
+        vnstat_rs::format_interface_type(selected_stats.interface_type)
+    );
     println!();
 
-    let start_stats = stats.iter().find(|s| s.name == selected_iface).unwrap().clone();
+    let start_stats = selected_stats.clone();
     let mut last_stats = start_stats.clone();
     let start_time = std::time::Instant::now();
     let mut first_iteration = true;
@@ -160,6 +175,10 @@ struct Cli {
     /// Print version
     #[arg(short = 'V', long = "version")]
     version: bool,
+
+    /// Only show physical interfaces
+    #[arg(long)]
+    only_physical: bool,
 
     /// Select interface
     #[arg(short, long, value_name = "iface")]
@@ -444,9 +463,14 @@ async fn main() -> Result<()> {
     if cli.iflist {
         let mut stats = vnstat_rs::parse_net_dev()?;
         stats.retain(|s| s.rx_bytes + s.tx_bytes > 0);
-        println!("{:<15} {:<15} {:<15}", "Interface", "RX Total", "TX Total");
+        println!("{:<15} {:<15} {:<15} {:<25}", "Interface", "RX Total", "TX Total", "Type");
         for s in stats {
-            println!("{:<15} {:<15} {:<15}", s.name, vnstat_rs::format_bytes(s.rx_bytes), vnstat_rs::format_bytes(s.tx_bytes));
+            println!("{:<15} {:<15} {:<15} {:<25}", 
+                s.name, 
+                vnstat_rs::format_bytes(s.rx_bytes), 
+                vnstat_rs::format_bytes(s.tx_bytes),
+                vnstat_rs::format_interface_type(s.interface_type)
+            );
         }
         return Ok(());
     }
@@ -460,6 +484,8 @@ async fn main() -> Result<()> {
     let etc_config = PathBuf::from("/etc/vnstat-rs/vnstat-rs.conf");
     let home = std::env::var("HOME").unwrap_or_default();
     let user_config = PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
+
+    let filter_type: Option<u8> = if cli.only_physical { Some(0) } else { None };
 
     let file_config = if let Some(ref path) = cli.config {
         let expanded_path = vnstat_rs::expand_tilde(path);
@@ -519,12 +545,17 @@ async fn main() -> Result<()> {
                     table: "hour".to_string(), 
                     interface: cli.iface.clone(), 
                     host: host_filter_ipc.clone(),
+                    filter_type,
                     limit: 24,
                     begin: None,
                     end: None,
                 })
             } else if cli.nintyfifth {
-                Some(IpcRequest::Get95th { interface: cli.iface.clone(), host: host_filter_ipc.clone() })
+                Some(IpcRequest::Get95th { 
+                    interface: cli.iface.clone(), 
+                    host: host_filter_ipc.clone(),
+                    filter_type,
+                })
             } else if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
                 let (table, default_limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(24)) }
                     else if let Some(l) = cli.hours { ("hour", l.unwrap_or(24)) }
@@ -543,15 +574,24 @@ async fn main() -> Result<()> {
                     table: table.to_string(), 
                     interface: cli.iface.clone(), 
                     host: host_filter_ipc.clone(),
+                    filter_type,
                     limit,
                     begin,
                     end,
                 })
             } else if !cli.update && !cli.init && !cli.iflist {
                 if matches!(format, OutputFormat::Table) {
-                    Some(IpcRequest::GetSummary { interface: cli.iface.clone(), host: host_filter_ipc.clone() })
+                    Some(IpcRequest::GetSummary { 
+                        interface: cli.iface.clone(), 
+                        host: host_filter_ipc.clone(),
+                        filter_type,
+                    })
                 } else {
-                    Some(IpcRequest::GetStats { interface: cli.iface.clone(), host: host_filter_ipc.clone() })
+                    Some(IpcRequest::GetStats { 
+                        interface: cli.iface.clone(), 
+                        host: host_filter_ipc.clone(),
+                        filter_type,
+                    })
                 }
             } else {
                 None
@@ -654,7 +694,7 @@ async fn main() -> Result<()> {
     };
 
     if let Some(iface) = cli.add {
-        db.create_interface(&iface, 0, 0, None).await?;
+        db.create_interface(&iface, 0, 0, None, None).await?;
         println!("Interface \"{}\" added to database for host \"{}\".", iface, db.hostname);
         return Ok(());
     }
@@ -676,7 +716,7 @@ async fn main() -> Result<()> {
 
     if let Some(alias) = cli.setalias {
         let iface = cli.iface.ok_or_else(|| anyhow::anyhow!("Please specify interface with -i to set alias"))?;
-        if let Some((id, _, _, _, _, _, _, _)) = db.get_interface(&iface).await? {
+        if let Some((id, _, _, _, _, _, _, _, _)) = db.get_interface(&iface).await? {
             db.update_interface_alias(id, &iface, &alias).await?;
             println!("Alias for interface \"{}\" set to \"{}\".", iface, alias);
         } else {
@@ -716,13 +756,13 @@ async fn main() -> Result<()> {
     let final_host_filter = if cli.all_hosts { None } else { cli.host.as_deref().or(current_machine_id.as_deref()) };
 
     if cli.nintyfifth {
-        let data = db.get_95th_data(cli.iface.as_deref(), final_host_filter).await?;
+        let data = db.get_95th_data(cli.iface.as_deref(), final_host_filter, filter_type).await?;
         print_95th_table(data, file_config.five_minute_hours);
         return Ok(());
     }
 
     if cli.hoursgraph {
-        let mut history = db.get_history("hour", cli.iface.as_deref(), final_host_filter, 24, None, None).await?;
+        let mut history = db.get_history("hour", cli.iface.as_deref(), final_host_filter, filter_type, 24, None, None).await?;
         history.retain(|h| h.rx + h.tx > 0);
         vnstat_rs::print_hours_graph(history);
         return Ok(());
@@ -740,7 +780,7 @@ async fn main() -> Result<()> {
         let begin = cli.begin.as_deref().and_then(parse_date_arg);
         let end = cli.end.as_deref().and_then(parse_date_arg);
 
-        let mut history = db.get_history(table, cli.iface.as_deref(), final_host_filter, limit, begin, end).await?;
+        let mut history = db.get_history(table, cli.iface.as_deref(), final_host_filter, filter_type, limit, begin, end).await?;
         history.retain(|h| h.rx + h.tx > 0);
         
         match format {
@@ -758,8 +798,9 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    if !matches!(format, OutputFormat::Table) {
-        let mut stats = db.get_all_interface_stats(cli.iface.as_deref(), final_host_filter).await?;
+    if matches!(format, OutputFormat::Oneline) {
+        let mut stats = db.get_all_interface_stats(cli.iface.as_deref(), final_host_filter, filter_type).await?;
+
         stats.retain(|s| s.rx_bytes + s.tx_bytes > 0);
         match format {
             OutputFormat::Json => println!("{}", serde_json::to_string(&vnstat_rs::VnStatJson::new(stats))?),
@@ -775,7 +816,7 @@ async fn main() -> Result<()> {
     }
 
     // Default Table view (vnstat summary)
-    let summaries = db.get_summary(cli.iface.as_deref(), final_host_filter).await?;
+    let summaries = db.get_summary(cli.iface.as_deref(), final_host_filter, filter_type).await?;
     print_summary_table(summaries, &db.machine_id);
 
     Ok(())

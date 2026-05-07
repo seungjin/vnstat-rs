@@ -4,6 +4,7 @@ use chrono::{Datelike, Timelike, Local};
 pub struct InterfaceStats {
     pub name: String,
     pub alias: Option<String>,
+    pub interface_type: Option<u8>,
     pub mac_address: Option<String>,
     pub rx_bytes: u64,
     pub tx_bytes: u64,
@@ -25,6 +26,7 @@ pub struct VnStatJson {
 pub struct JsonInterface {
     pub name: String,
     pub alias: String,
+    pub interface_type: Option<u8>,
     pub mac_address: Option<String>,
     pub created: JsonTimestamp,
     pub updated: JsonTimestamp,
@@ -159,6 +161,7 @@ impl InterfaceStats {
         JsonInterface {
             name: self.name.clone(),
             alias: self.alias.clone().unwrap_or_default(),
+            interface_type: self.interface_type.clone(),
             mac_address: self.mac_address.clone(),
             created: JsonTimestamp::from_timestamp(self.created, false),
             updated: JsonTimestamp::from_timestamp(self.updated, true),
@@ -239,6 +242,9 @@ impl JsonInterface {
         let mut out = format!(" <interface name=\"{}\">", self.name);
         out.push_str(&format!("<name>{}</name>", self.name));
         out.push_str(&format!("<alias>{}</alias>", self.alias));
+        if let Some(ref t) = self.interface_type {
+            out.push_str(&format!("<type>{}</type>", t));
+        }
         if let Some(ref mac) = self.mac_address {
             out.push_str(&format!("<mac_address>{}</mac_address>", mac));
         }
@@ -304,6 +310,7 @@ impl VnStatJson {
                 self.interfaces.push(JsonInterface {
                     name: entry.interface.clone(),
                     alias: String::new(),
+                    interface_type: None,
                     mac_address: None,
                     created: JsonTimestamp::from_timestamp(0, false),
                     updated: JsonTimestamp::from_timestamp(0, false),
@@ -323,6 +330,7 @@ mod tests {
         let stats = vec![InterfaceStats {
             name: "eth0".to_string(),
             alias: Some("lan".to_string()),
+            interface_type: Some(0),
             mac_address: Some("00:11:22:33:44:55".to_string()),
             rx_bytes: 1000,
             tx_bytes: 2000,

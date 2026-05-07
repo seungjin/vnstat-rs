@@ -2,21 +2,22 @@ use crate::models::{InterfaceStats, HistoryEntry, SummaryData, NintyFifthData};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub enum IpcRequest {
-    GetStats { interface: Option<String>, host: Option<String> },
+    GetStats { interface: Option<String>, host: Option<String>, filter_type: Option<u8> },
     GetHistory { 
         table: String, 
         interface: Option<String>, 
         host: Option<String>,
+        filter_type: Option<u8>,
         limit: usize,
         begin: Option<i64>,
         end: Option<i64>,
     },
-    GetSummary { interface: Option<String>, host: Option<String> },
+    GetSummary { interface: Option<String>, host: Option<String>, filter_type: Option<u8> },
     GetInfo,
     GetConfig { name: String },
     SetConfig { name: String, value: String },
     ListHosts { host: Option<String> },
-    Get95th { interface: Option<String>, host: Option<String> },
+    Get95th { interface: Option<String>, host: Option<String>, filter_type: Option<u8> },
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]

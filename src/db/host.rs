@@ -20,8 +20,8 @@ impl Db {
         };
 
         if let Some(ref remote) = self.remote_conn {
-            let remote_upsert_sql = "INSERT INTO host (machine_id, hostname, version, started) VALUES (?, ?, ?, ?)
-                                     ON CONFLICT(machine_id) DO UPDATE SET hostname = excluded.hostname, version = excluded.version, started = excluded.started";
+            let remote_upsert_sql = "INSERT INTO host (machine_id, hostname, version, started, last_seen) VALUES (?, ?, ?, ?, strftime('%s','now'))
+                                     ON CONFLICT(machine_id) DO UPDATE SET hostname = excluded.hostname, version = excluded.version, started = excluded.started, last_seen = strftime('%s','now')";
             if let Err(e) = remote.execute(remote_upsert_sql, (self.machine_id.clone(), self.hostname.clone(), version, now)).await {
                 eprintln!("Warning: Failed to upsert host on remote: {}", e);
             }

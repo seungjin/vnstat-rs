@@ -2,6 +2,21 @@ use crate::models::{HistoryEntry, SummaryData, NintyFifthData};
 use crate::utils::format_bytes;
 use chrono::{DateTime, Datelike, Local, TimeZone, Timelike};
 
+pub fn format_interface_type(itype: Option<u8>) -> String {
+    match itype {
+        Some(0) => "Physical (Ethernet)".to_string(),
+        Some(1) => "Physical (Wireless)".to_string(),
+        Some(2) => "Physical (Mobile)".to_string(),
+        Some(100) => "Virtual (Generic)".to_string(),
+        Some(101) => "Virtual (Loopback)".to_string(),
+        Some(102) => "Virtual (Bridge)".to_string(),
+        Some(105) => "Virtual (VPN/TUN)".to_string(),
+        Some(106) => "Virtual (Veth/Docker)".to_string(),
+        Some(t) => format!("Other ({})", t),
+        None => "Unknown".to_string(),
+    }
+}
+
 pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
     if summaries.is_empty() {
         println!("No data available for the selected host(s).");
@@ -46,9 +61,6 @@ pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
         host_summaries.sort_by(|a, b| a.name.cmp(&b.name));
 
         for summary in host_summaries {
-            if summary.name == "lo" {
-                continue;
-            }
             println!(" {}:", summary.name);
 
             let print_line = |label: &str, rx: u64, tx: u64, est: Option<String>| {
@@ -133,9 +145,6 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
         interfaces.sort();
 
         for iface in interfaces {
-            if iface == "lo" {
-                continue;
-            }
             let entries = interface_map.get(&iface).unwrap();
             let tz_suffix = Local::now().format("%Z").to_string();
             let title = match table {

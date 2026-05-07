@@ -8,8 +8,6 @@ use chrono::{Datelike, Local, TimeZone, Utc, Timelike};
 
 impl Db {
     pub async fn add_traffic(&self, interface_id: i64, interface_name: &str, table: &str, date: i64, rx: u64, tx: u64) -> Result<()> {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
-        
         let local_sql = format!(
                 "INSERT INTO {} (interface, date, rx, tx) VALUES (?, ?, ?, ?)
                  ON CONFLICT(interface, date) DO UPDATE SET rx = rx + excluded.rx, tx = tx + excluded.tx",
@@ -17,9 +15,6 @@ impl Db {
             );
         self.local_conn.execute(&local_sql, (interface_id, date, rx as i64, tx as i64)).await?;
         
-        // Update host last_seen locally
-        let _ = self.local_conn.execute("UPDATE host SET last_seen = ? WHERE machine_id = ?", (now, self.machine_id.clone())).await;
-
         if let Some(ref remote) = self.remote_conn {
             let remote_sql = format!(
                 "INSERT INTO {table} (interface, date, rx, tx)
@@ -30,9 +25,6 @@ impl Db {
             if let Err(e) = remote.execute(&remote_sql, (date, rx as i64, tx as i64, interface_name.to_string(), self.machine_id.clone())).await {
                 eprintln!("Warning: Failed to add traffic to remote (table {}): {}", table, e);
             }
-
-            // Update host last_seen remotely
-            let _ = remote.execute("UPDATE host SET last_seen = ? WHERE machine_id = ?", (now, self.machine_id.clone())).await;
         }
         Ok(())
     }
@@ -160,6 +152,14 @@ impl Db {
     }
 
     pub async fn update_stats(&self, filter_iface: Option<&str>, config: &crate::config::Config) -> Result<()> {
+        // 1. Update host last_seen heartbeat using database time to avoid clock drift issues
+        let _ = self.local_conn.execute("UPDATE host SET last_seen = strftime('%s','now') WHERE machine_id = ?", [self.machine_id.clone()]).await;
+        if let Some(ref remote) = self.remote_conn {
+            if let Err(e) = remote.execute("UPDATE host SET last_seen = strftime('%s','now') WHERE machine_id = ?", [self.machine_id.clone()]).await {
+                eprintln!("Warning: Failed to update heartbeat on remote: {}", e);
+            }
+        }
+
         let stats = parse_net_dev()?;
         let mut seen_ids = std::collections::HashSet::new();
 
@@ -172,7 +172,7 @@ impl Db {
             // Log discovered interface
             println!("Processing interface: {}", stat.name); 
 
-            if let Some((id, last_rx, last_tx, current_mac, updated, created, rxtotal, txtotal)) = self.get_interface(&stat.name).await? {
+            if let Some((id, last_rx, last_tx, current_mac, itype, updated, created, rxtotal, txtotal)) = self.get_interface(&stat.name).await? {
                 seen_ids.insert(id);
                 
                 // Mark as active if it was inactive
@@ -215,13 +215,13 @@ impl Db {
                     if rx_delta > 0 || tx_delta > 0 {
                         println!("Updating interface {} (+{} RX, +{} TX)...", stat.name, rx_delta, tx_delta);
                     }
-                    self.update_interface_counters(id, &stat.name, stat.rx_bytes, stat.tx_bytes, rx_delta, tx_delta, rxtotal, txtotal, created, current_mac).await?;
+                    self.update_interface_counters(id, &stat.name, stat.rx_bytes, stat.tx_bytes, rx_delta, tx_delta, rxtotal, txtotal, created, current_mac, stat.interface_type.clone().or(itype)).await?;
                     if rx_delta > 0 || tx_delta > 0 {
                         self.add_history_entry(id, &stat.name, rx_delta, tx_delta).await?;
                     }
                 }
             } else {
-                let id = self.create_interface(&stat.name, stat.rx_bytes, stat.tx_bytes, stat.mac_address).await?;
+                let id = self.create_interface(&stat.name, stat.rx_bytes, stat.tx_bytes, stat.mac_address, stat.interface_type).await?;
                 seen_ids.insert(id);
                 self.add_history_entry(id, &stat.name, 0, 0).await?;
                 println!("New interface found and registered: {} (host: {})", stat.name, self.hostname);
@@ -230,11 +230,11 @@ impl Db {
 
         // If not filtering, mark interfaces not seen in this pass as inactive
         if filter_iface.is_none() {
-            let all_ifaces = self.get_all_interface_stats(None, Some(&self.machine_id)).await?;
+            let all_ifaces = self.get_all_interface_stats(None, Some(&self.machine_id), None).await?;
             for iface_stat in all_ifaces {
                 // We need the internal ID to mark inactive. 
                 // Since get_all_interface_stats doesn't return ID, we'll use a new helper or get_interface
-                if let Some((id, _, _, _, _, _, _, _)) = self.get_interface(&iface_stat.name).await? {
+                if let Some((id, _, _, _, _, _, _, _, _)) = self.get_interface(&iface_stat.name).await? {
                     if !seen_ids.contains(&id) {
                         let _ = self.set_interface_active(id, &iface_stat.name, false).await;
                     }
@@ -245,16 +245,16 @@ impl Db {
         Ok(())
     }
 
-    pub async fn get_all_interface_stats(&self, filter_iface: Option<&str>, filter_host: Option<&str>) -> Result<Vec<InterfaceStats>> {
+    pub async fn get_all_interface_stats(&self, filter_iface: Option<&str>, filter_host: Option<&str>, filter_type: Option<u8>) -> Result<Vec<InterfaceStats>> {
         let conn = if filter_host.is_none() || filter_host != Some(&self.machine_id) {
              self.remote_conn.as_ref().unwrap_or(&self.local_conn)
         } else {
              &self.local_conn
         };
 
-        let mut ifaces_query = "SELECT i.id, i.name, i.alias, i.mac_address, i.rxtotal, i.txtotal, h.hostname, i.created, i.updated, h.machine_id
+        let mut ifaces_query = "SELECT i.id, i.name, i.alias, i.mac_address, i.rxtotal, i.txtotal, h.hostname, i.created, i.updated, h.machine_id, i.interface_type
                           FROM interface i
-                          JOIN host h ON i.host_id = h.id WHERE i.name != 'lo' ".to_string();
+                          JOIN host h ON i.host_id = h.id WHERE 1=1 ".to_string();
 
         if let Some(iface) = filter_iface {
             ifaces_query.push_str(&format!(" AND i.name = '{}' ", iface));
@@ -262,6 +262,10 @@ impl Db {
 
         if let Some(host) = filter_host {
             ifaces_query.push_str(&format!(" AND (h.hostname = '{}' OR h.machine_id = '{}') ", host, host));
+        }
+
+        if let Some(t) = filter_type {
+            ifaces_query.push_str(&format!(" AND i.interface_type = {} ", t));
         }
 
         let mut rows = conn.query(&ifaces_query, params![]).await?;
@@ -275,10 +279,12 @@ impl Db {
             let hostname: String = row.get(6)?;
             let created: i64 = row.get(7)?;
             let updated: i64 = row.get(8)?;
+            let itype: Option<u8> = row.get::<Option<i64>>(10)?.map(|v| v as u8);
 
             stats.push(InterfaceStats {
                 name,
                 alias,
+                interface_type: itype,
                 mac_address: mac,
                 rx_bytes: rxtotal as u64,
                 tx_bytes: txtotal as u64,
@@ -291,14 +297,14 @@ impl Db {
         }
         Ok(stats)
     }
-    pub async fn get_history(&self, table: &str, filter_iface: Option<&str>, filter_host: Option<&str>, limit: usize, begin: Option<i64>, end: Option<i64>) -> Result<Vec<HistoryEntry>> {
+    pub async fn get_history(&self, table: &str, filter_iface: Option<&str>, filter_host: Option<&str>, filter_type: Option<u8>, limit: usize, begin: Option<i64>, end: Option<i64>) -> Result<Vec<HistoryEntry>> {
         let conn = if filter_host.is_none() || filter_host != Some(&self.machine_id) {
             self.remote_conn.as_ref().unwrap_or(&self.local_conn)
         } else {
             &self.local_conn
         };
 
-        let mut ifaces_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE i.name != 'lo'".to_string();
+        let mut ifaces_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE 1=1".to_string();
 
         if let Some(iface) = filter_iface {
             ifaces_query.push_str(&format!(" AND i.name = '{}'", iface));
@@ -306,6 +312,10 @@ impl Db {
 
         if let Some(host) = filter_host {
             ifaces_query.push_str(&format!(" AND (h.hostname = '{}' OR h.machine_id = '{}')", host, host));
+        }
+
+        if let Some(t) = filter_type {
+            ifaces_query.push_str(&format!(" AND i.interface_type = {}", t));
         }
 
         let mut iface_rows = conn.query(&ifaces_query, params![]).await?;
@@ -435,14 +445,14 @@ impl Db {
         Ok(history)
     }
 
-    pub async fn get_summary(&self, filter_iface: Option<&str>, filter_host: Option<&str>) -> Result<Vec<SummaryData>> {
+    pub async fn get_summary(&self, filter_iface: Option<&str>, filter_host: Option<&str>, filter_type: Option<u8>) -> Result<Vec<SummaryData>> {
         // For all-hosts, we must query remote to get other hosts
         let conn = if filter_host.is_none() || filter_host != Some(&self.machine_id) {
              self.remote_conn.as_ref().unwrap_or(&self.local_conn)
         } else {
              &self.local_conn
         };
-        let mut ifaces_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE i.name != 'lo'".to_string();
+        let mut ifaces_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE 1=1".to_string();
 
         if let Some(iface) = filter_iface {
             ifaces_query.push_str(&format!(" AND i.name = '{}'", iface));
@@ -450,6 +460,10 @@ impl Db {
 
         if let Some(host) = filter_host {
             ifaces_query.push_str(&format!(" AND (h.hostname = '{}' OR h.machine_id = '{}')", host, host));
+        }
+
+        if let Some(t) = filter_type {
+            ifaces_query.push_str(&format!(" AND i.interface_type = {}", t));
         }
 
         ifaces_query.push_str(" ORDER BY h.hostname, i.name");
@@ -541,7 +555,7 @@ impl Db {
         Ok(summaries)
     }
 
-    pub async fn get_95th_data(&self, filter_iface: Option<&str>, filter_host: Option<&str>) -> Result<NintyFifthData> {
+    pub async fn get_95th_data(&self, filter_iface: Option<&str>, filter_host: Option<&str>, filter_type: Option<u8>) -> Result<NintyFifthData> {
         let conn = if filter_host.is_none() || filter_host != Some(&self.machine_id) {
              self.remote_conn.as_ref().unwrap_or(&self.local_conn)
         } else {
@@ -549,12 +563,15 @@ impl Db {
         };
 
         // Find the specific interface, prioritizing active ones with traffic
-        let mut iface_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE i.name != 'lo' ".to_string();
+        let mut iface_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE 1=1 ".to_string();
         if let Some(iface) = filter_iface {
             iface_query.push_str(&format!(" AND i.name = '{}'", iface));
         }
         if let Some(host) = filter_host {
             iface_query.push_str(&format!(" AND (h.hostname = '{}' OR h.machine_id = '{}')", host, host));
+        }
+        if let Some(t) = filter_type {
+            iface_query.push_str(&format!(" AND i.interface_type = {}", t));
         }
         
         // Prioritize active interfaces with the most total traffic
@@ -629,12 +646,12 @@ mod tests {
         let host_b_id = db.local_conn.last_insert_rowid();
 
         // Create interfaces
-        let iface_a = db.create_interface("eth0", 0, 0, None).await?;
+        let iface_a = db.create_interface("eth0", 0, 0, None, Some(0)).await?;
         
         // Manually create interface for host B
         db.local_conn.execute(
-            "INSERT INTO interface (host_id, name, created, updated) VALUES (?, ?, ?, ?)",
-            (host_b_id, "eth0", 0, 0)
+            "INSERT INTO interface (host_id, name, created, updated, interface_type) VALUES (?, ?, ?, ?, ?)",
+            (host_b_id, "eth0", 0, 0, Some(0))
         ).await?;
         let iface_b = db.local_conn.last_insert_rowid();
 

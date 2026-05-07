@@ -168,20 +168,20 @@ async fn main() -> Result<()> {
                             Ok(n) if n > 0 => {
                                 let req: Result<IpcRequest, _> = serde_json::from_slice(&buffer[..n]);
                                 let resp = match req {
-                                    Ok(IpcRequest::GetStats { interface, host }) => {
-                                        match db.get_all_interface_stats(interface.as_deref(), host.as_deref()).await {
+                                    Ok(IpcRequest::GetStats { interface, host, filter_type }) => {
+                                        match db.get_all_interface_stats(interface.as_deref(), host.as_deref(), filter_type).await {
                                             Ok(stats) => IpcResponse::Stats(stats),
                                             Err(e) => IpcResponse::Error(e.to_string()),
                                         }
                                     }
-                                    Ok(IpcRequest::GetHistory { table, interface, host, limit, begin, end }) => {
-                                        match db.get_history(&table, interface.as_deref(), host.as_deref(), limit, begin, end).await {
+                                    Ok(IpcRequest::GetHistory { table, interface, host, filter_type, limit, begin, end }) => {
+                                        match db.get_history(&table, interface.as_deref(), host.as_deref(), filter_type, limit, begin, end).await {
                                             Ok(history) => IpcResponse::History(history),
                                             Err(e) => IpcResponse::Error(e.to_string()),
                                         }
                                     }
-                                    Ok(IpcRequest::GetSummary { interface, host }) => {
-                                        match db.get_summary(interface.as_deref(), host.as_deref()).await {
+                                    Ok(IpcRequest::GetSummary { interface, host, filter_type }) => {
+                                        match db.get_summary(interface.as_deref(), host.as_deref(), filter_type).await {
                                             Ok(summary) => IpcResponse::Summary(summary),
                                             Err(e) => IpcResponse::Error(e.to_string()),
                                         }
@@ -220,8 +220,8 @@ async fn main() -> Result<()> {
                                             Err(e) => IpcResponse::Error(e.to_string()),
                                         }
                                     }
-                                    Ok(IpcRequest::Get95th { interface, host }) => {
-                                        match db.get_95th_data(interface.as_deref(), host.as_deref()).await {
+                                    Ok(IpcRequest::Get95th { interface, host, filter_type }) => {
+                                        match db.get_95th_data(interface.as_deref(), host.as_deref(), filter_type).await {
                                             Ok(data) => IpcResponse::NintyFifth(data),
                                             Err(e) => IpcResponse::Error(e.to_string()),
                                         }

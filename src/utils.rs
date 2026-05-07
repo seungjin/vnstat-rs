@@ -51,9 +51,6 @@ pub fn parse_net_dev() -> Result<Vec<InterfaceStats>> {
         }
 
         let name = parts[0].trim().to_string();
-        if name == "lo" {
-            continue;
-        }
         let data_parts: Vec<&str> = parts[1].split_whitespace().collect();
         
         if data_parts.len() < 10 {
@@ -65,6 +62,31 @@ pub fn parse_net_dev() -> Result<Vec<InterfaceStats>> {
         let tx_bytes = data_parts[8].parse::<u64>().unwrap_or(0);
         let tx_packets = data_parts[9].parse::<u64>().unwrap_or(0);
 
+        // Detect granular interface type
+        let interface_type = if Path::new(&format!("/sys/class/net/{}/device", name)).exists() {
+            // Physical
+            if Path::new(&format!("/sys/class/net/{}/wireless", name)).exists() || Path::new(&format!("/sys/class/net/{}/phy80211", name)).exists() {
+                Some(1) // wireless
+            } else if Path::new(&format!("/sys/class/net/{}/wwan", name)).exists() {
+                Some(2) // mobile
+            } else {
+                Some(0) // ethernet (default physical)
+            }
+        } else {
+            // Virtual
+            if name == "lo" {
+                Some(101) // loopback
+            } else if Path::new(&format!("/sys/class/net/{}/bridge", name)).exists() || name.starts_with("br-") {
+                Some(102) // bridge
+            } else if Path::new(&format!("/sys/class/net/{}/tun_flags", name)).exists() || name.starts_with("tun") || name.starts_with("tap") || name.starts_with("wg") {
+                Some(105) // vpn/tun
+            } else if name.starts_with("veth") || name.starts_with("docker") {
+                Some(106) // veth/docker
+            } else {
+                Some(100) // generic virtual
+            }
+        };
+
         // Find the MAC address for this interface
         let mac_address = ifaces.iter()
             .find(|i| i.name == name)
@@ -74,6 +96,7 @@ pub fn parse_net_dev() -> Result<Vec<InterfaceStats>> {
         stats.push(InterfaceStats {
             name,
             alias: None,
+            interface_type,
             mac_address,
             rx_bytes,
             tx_bytes,
