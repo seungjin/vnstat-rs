@@ -1,18 +1,26 @@
 # vnstat-rs
 
-A Rust ~~port of [vnStat](https://github.com/vergoh/vnstat)~~ written network monitoring tool using [libsql](https://github.com/tursodatabase/libsql) for robust local storage and optional remote synchronization with Turso.
+A modern Rust network monitoring tool inspired by [vnStat](https://github.com/vergoh/vnstat), featuring [libsql](https://github.com/tursodatabase/libsql) for robust local storage and native remote synchronization with Turso.
 
 Following the original vnStat architecture, this project provides two binaries:
 - `vnstat-rs`: The CLI client for querying statistics.
 - `vnstatd-rs`: The background daemon for collecting traffic data.
 
-## Features
+## Key Improvements over Original vnStat
 
 - **Hybrid Persistence**: Maintains a local SQLite/libsql database for the local host's statistics while optionally aggregating data from multiple hosts via a remote Libsql/Turso server.
+- **Distributed Identification**: Uses `machine-id` (from `/etc/machine-id`) and MAC addresses to uniquely identify hosts and interfaces, allowing for unified monitoring of multiple servers from a single CLI.
+- **Reboot Detection**: Automatically detects system reboots by monitoring `/proc/uptime`. This prevents traffic over-counting by correctly identifying counter resets instead of treating them as rollovers.
+- **Race-Free Updates**: The CLI delegates update requests (`-u`) to the running daemon via Unix Domain Sockets, preventing data corruption and double-counting that can occur if two processes access the database simultaneously.
+- **Smart Filtering**: Prioritizes physical interfaces (Ethernet, WiFi, Mobile) in default summary views to provide the most relevant data while still allowing monitoring of virtual interfaces (VPNs, Bridges, Docker).
+- **Modern Storage**: Built on `libsql` for better performance and native cloud synchronization capabilities.
+
+## Features
+
 - **Traffic Monitoring**: Reads network traffic statistics from `/proc/net/dev`.
-- **Delta Calculation**: Stores only the differences between updates, handling counter resets (e.g., after reboots).
+- **Delta Calculation**: Stores only the differences between updates, handling counter resets and 32/64-bit rollovers.
 - **Automated Failover**: The CLI automatically detects if `vnstatd-rs` is not running and falls back to direct database access.
-- **Unique Identification**: Uses both `machine-id` (from `/etc/machine-id`) and MAC addresses to uniquely identify hosts and interfaces in a distributed environment.
+- **Unique Identification**: Uses both `machine-id` and MAC addresses for robust identification in distributed environments.
 - **Hardware Tracking**: Automatically discovers and stores MAC addresses for all monitored interfaces.
 - **Flexible Persistence**: Automatically switches to user-local paths (`~/.config` and `~/.local`) if system paths are not accessible.
 - **Multi-host Support**: Aggregate views of all reporting hosts using the `--all-hosts` flag.
@@ -46,13 +54,16 @@ sudo cp target/release/vnstatd-rs /usr/local/bin/
 ### vnstat-rs (Client)
 
 ```bash
-# Show summary (current host)
+# Show summary (physical interfaces of current host)
 vnstat-rs
+
+# Show all interfaces (including virtual/docker/lo)
+vnstat-rs -a
 
 # Show daily statistics
 vnstat-rs -d
 
-# Show monthly statistics (compliant with official vnStat format)
+# Show monthly statistics
 vnstat-rs -m
 
 # Show statistics for all hosts in the remote database
@@ -61,17 +72,14 @@ vnstat-rs --all-hosts
 # List all known hosts and their machine IDs
 vnstat-rs --host-list
 
-# Show daemon/host information (includes Machine ID and MAC)
+# Show daemon/host information
 vnstat-rs --info
 
 # Select a specific interface
 vnstat-rs -i eth0
 
-# Update the database (one-shot update)
+# Update the database (delegates to daemon if running)
 vnstat-rs -u
-
-# Initialize the database
-vnstat-rs --init
 ```
 
 ### vnstatd-rs (Daemon)
@@ -89,7 +97,7 @@ vnstatd-rs -c ~/.vnstat-rs.conf
 
 ### User Space
 
-If you installed via `cargo install`, you can set up a user-space daemon (note that monitoring some interfaces may still require root privileges):
+If you installed via `cargo install`, you can set up a user-space daemon:
 
 ```bash
 just setup-user-service
@@ -101,20 +109,14 @@ This will run the daemon as your local user and store data in `~/.local/share/vn
 ## Configuration
 
 By default, the application looks for a configuration file at:
-- Root: `/etc/vnstat-rs.conf`
+- Root: `/etc/vnstat-rs/vnstat-rs.conf`
 - User: `~/.config/vnstat-rs/vnstat-rs.conf`
 
 ### Remote Synchronization
 
-To centralize data from multiple hosts, use the `LibsqlUrl` and `LibsqlToken` settings:
+To centralize data from multiple hosts, use the `LibsqlUrl` and `LibsqlToken` settings in your config file:
 
 ```conf
-# location of the database directory
-# DatabaseDir "/var/lib/vnstat-rs"
-
-# database file name
-# Database "vnstat-rs.db"
-
 # Remote Libsql/Turso configuration
 LibsqlUrl "libsql://your-db-name.turso.io"
 LibsqlToken "your-auth-token"
@@ -123,35 +125,6 @@ LibsqlToken "your-auth-token"
 UpdateInterval 30
 SyncInterval 300
 ```
-
-*Note: `TursoUrl` and `TursoToken` are still supported as aliases.*
-
-## Systemd Service
-
-A systemd service file is provided in `vnstatd-rs.service`. To install it:
-
-1. Build the release binaries: `cargo build --release`
-2. Install the binaries: `sudo cp target/release/vnstat* /usr/local/bin/`
-3. Create a dedicated user: `sudo useradd -r -s /sbin/nologin vnstat`
-4. Create the data directory: `sudo mkdir /var/lib/vnstat-rs && sudo chown vnstat:vnstat /var/lib/vnstat-rs`
-5. Install the service file: `sudo cp vnstatd-rs.service /etc/systemd/system/`
-6. Enable and start the service:
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now vnstatd-rs
-   ```
-
-## Running without sudo
-
-By default, the application now automatically switches to user-local paths if not run as root or if it lacks permission to read `/etc/vnstat-rs.conf`:
-- Config: `~/.config/vnstat-rs/vnstat-rs.conf`
-- Data/Socket: `~/.local/share/vnstat-rs/`
-
-This allows a normal user to run the daemon and client without any special permissions or `sudo`. You can still override these using the `-c` (config) or `-D` (database) flags.
-
-## Versioning
-
-This project follows a versioning scheme where even minor version numbers indicate stable versions, and odd minor version numbers indicate unstable/development versions.
 
 ## License
 
