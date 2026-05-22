@@ -1,12 +1,12 @@
+use crate::utils::get_machine_id;
 use anyhow::{Context, Result};
-use std::fs;
-use std::path::{PathBuf};
-use crate::utils::{get_machine_id};
 use libsql::{Builder, Connection};
+use std::fs;
+use std::path::PathBuf;
 
-pub mod migrations;
 pub mod host;
 pub mod interface;
+pub mod migrations;
 pub mod stats;
 
 pub struct Db {
@@ -18,11 +18,17 @@ pub struct Db {
 }
 
 impl Db {
-    pub async fn connect(path: PathBuf, url: Option<String>, token: Option<String>, hostname_override: Option<String>) -> Result<Self> {
+    pub async fn connect(
+        path: PathBuf,
+        url: Option<String>,
+        token: Option<String>,
+        hostname_override: Option<String>,
+    ) -> Result<Self> {
         // 1. Always open local database
         if let Some(parent) = path.parent() {
             if !parent.exists() {
-                fs::create_dir_all(parent).context("Failed to create database directory")?;
+                fs::create_dir_all(parent)
+                    .context("Failed to create database directory")?;
             }
         }
         let path_str = path.to_string_lossy().to_string();
@@ -30,7 +36,9 @@ impl Db {
         let local_conn = local_db.connect()?;
 
         // 2. Optionally open remote database
-        let remote_conn = if let (Some(url), Some(token)) = (url.clone(), token.clone()) {
+        let remote_conn = if let (Some(url), Some(token)) =
+            (url.clone(), token.clone())
+        {
             if url.is_empty() {
                 None
             } else {
@@ -40,14 +48,20 @@ impl Db {
                         Ok(conn) => {
                             println!("Connected to remote database.");
                             Some(conn)
-                        },
+                        }
                         Err(e) => {
-                            eprintln!("Error: Failed to connect to remote database: {}", e);
+                            eprintln!(
+                                "Error: Failed to connect to remote database: {}",
+                                e
+                            );
                             None
                         }
                     },
                     Err(e) => {
-                        eprintln!("Error: Failed to initialize remote database client: {}", e);
+                        eprintln!(
+                            "Error: Failed to initialize remote database client: {}",
+                            e
+                        );
                         None
                     }
                 }
@@ -57,27 +71,40 @@ impl Db {
         };
 
         let hostname = hostname_override.unwrap_or_else(|| {
-            hostname::get().ok().and_then(|h| h.into_string().ok()).unwrap_or_else(|| "local".to_string())
+            hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .unwrap_or_else(|| "local".to_string())
         });
         let machine_id = get_machine_id()?;
 
-        Ok(Self { 
-            local_conn, 
-            remote_conn, 
-            hostname, 
-            machine_id, 
-            host_id: 0
+        Ok(Self {
+            local_conn,
+            remote_conn,
+            hostname,
+            machine_id,
+            host_id: 0,
         })
     }
 
-    pub async fn open(path: PathBuf, url: Option<String>, token: Option<String>, hostname_override: Option<String>) -> Result<Self> {
-        let mut db_obj = Self::connect(path, url, token, hostname_override).await?;
+    pub async fn open(
+        path: PathBuf,
+        url: Option<String>,
+        token: Option<String>,
+        hostname_override: Option<String>,
+    ) -> Result<Self> {
+        let mut db_obj =
+            Self::connect(path, url, token, hostname_override).await?;
         db_obj.init_schema().await?;
         db_obj.host_id = db_obj.get_or_create_host().await?;
         Ok(db_obj)
     }
 
-    pub async fn open_no_init(path: PathBuf, url: Option<String>, token: Option<String>) -> Result<Self> {
+    pub async fn open_no_init(
+        path: PathBuf,
+        url: Option<String>,
+        token: Option<String>,
+    ) -> Result<Self> {
         Self::connect(path, url, token, None).await
     }
 
@@ -90,14 +117,20 @@ impl Db {
         self.local_conn.execute_batch(sql).await?;
         if let Some(ref remote) = self.remote_conn {
             if let Err(e) = remote.execute_batch(sql).await {
-                eprintln!("Warning: Failed to execute batch on remote database: {}", e);
+                eprintln!(
+                    "Warning: Failed to execute batch on remote database: {}",
+                    e
+                );
             }
         }
         Ok(())
     }
 
     pub async fn get_info(&self, name: &str) -> Result<Option<String>> {
-        let mut rows = self.local_conn.query("SELECT value FROM info WHERE name = ?", [name]).await?;
+        let mut rows = self
+            .local_conn
+            .query("SELECT value FROM info WHERE name = ?", [name])
+            .await?;
         if let Some(row) = rows.next().await? {
             return Ok(Some(row.get(0)?));
         }

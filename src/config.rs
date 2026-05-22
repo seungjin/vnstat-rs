@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
-use std::fs;
 use crate::utils::expand_tilde;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Default, Debug)]
 pub struct Config {
@@ -47,7 +47,11 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
             continue;
         }
 
-        let parts: Vec<&str> = line.splitn(2, |c: char| c.is_whitespace()).map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        let parts: Vec<&str> = line
+            .splitn(2, |c: char| c.is_whitespace())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
         if parts.len() < 2 {
             continue;
         }
@@ -59,33 +63,53 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
             "DatabaseDir" => database_dir = Some(expand_tilde(value)),
             "Database" => database_file = Some(value.to_string()),
             "TursoUrl" | "LibsqlUrl" => config.url = Some(value.to_string()),
-            "TursoToken" | "LibsqlToken" => config.token = Some(value.to_string()),
+            "TursoToken" | "LibsqlToken" => {
+                config.token = Some(value.to_string())
+            }
             "UpdateInterval" => {
-                if let Ok(v) = value.parse() { config.update_interval = v; }
+                if let Ok(v) = value.parse() {
+                    config.update_interval = v;
+                }
             }
             "SyncInterval" => {
-                if let Ok(v) = value.parse() { config.sync_interval = v; }
+                if let Ok(v) = value.parse() {
+                    config.sync_interval = v;
+                }
             }
             "5MinuteHours" => {
-                if let Ok(v) = value.parse() { config.five_minute_hours = v; }
+                if let Ok(v) = value.parse() {
+                    config.five_minute_hours = v;
+                }
             }
             "HourlyDays" => {
-                if let Ok(v) = value.parse() { config.hourly_days = v; }
+                if let Ok(v) = value.parse() {
+                    config.hourly_days = v;
+                }
             }
             "DailyDays" => {
-                if let Ok(v) = value.parse() { config.daily_days = v; }
+                if let Ok(v) = value.parse() {
+                    config.daily_days = v;
+                }
             }
             "MonthlyMonths" => {
-                if let Ok(v) = value.parse() { config.monthly_months = v; }
+                if let Ok(v) = value.parse() {
+                    config.monthly_months = v;
+                }
             }
             "YearlyYears" => {
-                if let Ok(v) = value.parse() { config.yearly_years = v; }
+                if let Ok(v) = value.parse() {
+                    config.yearly_years = v;
+                }
             }
             "TopDayEntries" => {
-                if let Ok(v) = value.parse() { config.top_day_entries = v; }
+                if let Ok(v) = value.parse() {
+                    config.top_day_entries = v;
+                }
             }
             "MaxBandwidth" => {
-                if let Ok(v) = value.parse() { config.max_bandwidth = v; }
+                if let Ok(v) = value.parse() {
+                    config.max_bandwidth = v;
+                }
             }
             "DaemonSocket" => config.daemon_socket = Some(expand_tilde(value)),
             "Hostname" => config.hostname_override = Some(value.to_string()),
@@ -103,17 +127,24 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
                 Some(PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"))
             } else {
                 let home = std::env::var("HOME").unwrap_or_default();
-                Some(PathBuf::from(home).join(".local/share/vnstat-rs/vnstat-rs.db"))
+                Some(
+                    PathBuf::from(home)
+                        .join(".local/share/vnstat-rs/vnstat-rs.db"),
+                )
             }
         }
     };
 
     if config.daemon_socket.is_none() {
         if is_root {
-            config.daemon_socket = Some(PathBuf::from("/var/run/vnstat-rs.sock"));
+            config.daemon_socket =
+                Some(PathBuf::from("/var/run/vnstat-rs.sock"));
         } else {
             let home = std::env::var("HOME").unwrap_or_default();
-            config.daemon_socket = Some(PathBuf::from(home).join(".local/share/vnstat-rs/vnstat-rs.sock"));
+            config.daemon_socket = Some(
+                PathBuf::from(home)
+                    .join(".local/share/vnstat-rs/vnstat-rs.sock"),
+            );
         }
     }
 
@@ -135,12 +166,18 @@ pub fn get_default_config(is_root: bool) -> Config {
     };
 
     if is_root {
-        config.database = Some(PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
+        config.database =
+            Some(PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
         config.daemon_socket = Some(PathBuf::from("/var/run/vnstat-rs.sock"));
     } else {
         let home = std::env::var("HOME").unwrap_or_default();
-        config.database = Some(PathBuf::from(home.clone()).join(".local/share/vnstat-rs/vnstat-rs.db"));
-        config.daemon_socket = Some(PathBuf::from(home).join(".local/share/vnstat-rs/vnstat-rs.sock"));
+        config.database = Some(
+            PathBuf::from(home.clone())
+                .join(".local/share/vnstat-rs/vnstat-rs.db"),
+        );
+        config.daemon_socket = Some(
+            PathBuf::from(home).join(".local/share/vnstat-rs/vnstat-rs.sock"),
+        );
     }
 
     config
@@ -150,7 +187,8 @@ pub fn load_best_config() -> Config {
     let is_root = unsafe { libc::getuid() == 0 };
     let etc_config = PathBuf::from("/etc/vnstat-rs/vnstat-rs.conf");
     let home = std::env::var("HOME").unwrap_or_default();
-    let user_config = PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
+    let user_config =
+        PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
     let local_config = PathBuf::from("vnstat-rs.conf");
 
     // 1. Try /etc/vnstat-rs/vnstat-rs.conf

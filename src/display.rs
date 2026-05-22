@@ -1,4 +1,4 @@
-use crate::models::{HistoryEntry, SummaryData, NintyFifthData};
+use crate::models::{HistoryEntry, NintyFifthData, SummaryData};
 use crate::utils::format_bytes;
 use chrono::{DateTime, Datelike, Local, TimeZone, Timelike};
 
@@ -24,7 +24,8 @@ pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
     }
 
     // Group by hostname
-    let mut by_host: std::collections::HashMap<String, Vec<SummaryData>> = std::collections::HashMap::new();
+    let mut by_host: std::collections::HashMap<String, Vec<SummaryData>> =
+        std::collections::HashMap::new();
     for s in summaries {
         by_host.entry(s.hostname.clone()).or_default().push(s);
     }
@@ -37,61 +38,115 @@ pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
     let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
     let today_ts = Local.from_local_datetime(&today_start).unwrap().timestamp();
 
-    let this_month_start = now.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-    let this_month_ts = Local.from_local_datetime(&this_month_start).unwrap().timestamp();
-    
+    let this_month_start = now
+        .date_naive()
+        .with_day(1)
+        .unwrap()
+        .and_hms_opt(0, 0, 0)
+        .unwrap();
+    let this_month_ts = Local
+        .from_local_datetime(&this_month_start)
+        .unwrap()
+        .timestamp();
+
     let last_month_date = if now.month() == 1 {
-        now.date_naive().with_year(now.year() - 1).unwrap().with_month(12).unwrap().with_day(1).unwrap()
+        now.date_naive()
+            .with_year(now.year() - 1)
+            .unwrap()
+            .with_month(12)
+            .unwrap()
+            .with_day(1)
+            .unwrap()
     } else {
-        now.date_naive().with_month(now.month() - 1).unwrap().with_day(1).unwrap()
+        now.date_naive()
+            .with_month(now.month() - 1)
+            .unwrap()
+            .with_day(1)
+            .unwrap()
     };
-    let last_month_ts = Local.from_local_datetime(&last_month_date.and_hms_opt(0, 0, 0).unwrap()).unwrap().timestamp();
+    let last_month_ts = Local
+        .from_local_datetime(&last_month_date.and_hms_opt(0, 0, 0).unwrap())
+        .unwrap()
+        .timestamp();
 
     for hostname in hostnames {
         println!();
         // Only print host header if it's not the current machine or if we are showing multiple hosts
-        let current_machine_name = hostname::get().ok().and_then(|h| h.into_string().ok()).unwrap_or_else(|| "local".to_string());
+        let current_machine_name = hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "local".to_string());
         if by_host.len() > 1 || hostname != current_machine_name {
-            println!("{:-<73}", format!(" Host: {} ({}) ", hostname, Local::now().format("%Z")));
+            println!(
+                "{:-<73}",
+                format!(" Host: {} ({}) ", hostname, Local::now().format("%Z"))
+            );
         }
-        
-        println!("                      rx      /      tx      /     total    /   estimated");
-        
+
+        println!(
+            "                      rx      /      tx      /     total    /   estimated"
+        );
+
         let mut host_summaries = by_host.remove(&hostname).unwrap();
         host_summaries.sort_by(|a, b| a.name.cmp(&b.name));
 
         for summary in host_summaries {
             println!(" {}:", summary.name);
 
-            let print_line = |label: &str, rx: u64, tx: u64, est: Option<String>| {
-                let total = rx + tx;
-                print!("{:>14}{:>11}  /  {:>11}  /  {:>11}", 
-                    label, format_bytes_short(rx), format_bytes_short(tx), format_bytes_short(total));
-                if let Some(e) = est {
-                    println!("  /  {:>11}", e);
-                } else {
-                    println!();
-                }
-            };
+            let print_line =
+                |label: &str, rx: u64, tx: u64, est: Option<String>| {
+                    let total = rx + tx;
+                    print!(
+                        "{:>14}{:>11}  /  {:>11}  /  {:>11}",
+                        label,
+                        format_bytes_short(rx),
+                        format_bytes_short(tx),
+                        format_bytes_short(total)
+                    );
+                    if let Some(e) = est {
+                        println!("  /  {:>11}", e);
+                    } else {
+                        println!();
+                    }
+                };
 
             // Monthly lines
-            let last_month_label = DateTime::from_timestamp(last_month_ts, 0).unwrap().with_timezone(&Local).format("%Y-%m").to_string();
+            let last_month_label = DateTime::from_timestamp(last_month_ts, 0)
+                .unwrap()
+                .with_timezone(&Local)
+                .format("%Y-%m")
+                .to_string();
             let (lm_rx, lm_tx) = summary.last_month;
             print_line(&last_month_label, lm_rx, lm_tx, None);
 
-            let this_month_label = DateTime::from_timestamp(this_month_ts, 0).unwrap().with_timezone(&Local).format("%Y-%m").to_string();
+            let this_month_label = DateTime::from_timestamp(this_month_ts, 0)
+                .unwrap()
+                .with_timezone(&Local)
+                .format("%Y-%m")
+                .to_string();
             let (tm_rx, tm_tx) = summary.this_month;
-            
+
             let days_in_month = match now.month() {
-                1|3|5|7|8|10|12 => 31,
-                4|6|9|11 => 30,
-                2 => if (now.year() % 4 == 0 && now.year() % 100 != 0) || (now.year() % 400 == 0) { 29 } else { 28 },
+                1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+                4 | 6 | 9 | 11 => 30,
+                2 => {
+                    if (now.year() % 4 == 0 && now.year() % 100 != 0)
+                        || (now.year() % 400 == 0)
+                    {
+                        29
+                    } else {
+                        28
+                    }
+                }
                 _ => 30,
             };
             let current_day = now.day() as f64;
             let tm_total = tm_rx + tm_tx;
             let tm_est = if current_day > 0.0 && tm_total > 0 {
-                format_bytes_short((tm_total as f64 * (days_in_month as f64 / current_day)) as u64)
+                format_bytes_short(
+                    (tm_total as f64 * (days_in_month as f64 / current_day))
+                        as u64,
+                )
             } else {
                 "--".to_string()
             };
@@ -106,7 +161,9 @@ pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
             let t_total = t_rx + t_tx;
             let secs_passed = (now_ts - today_ts).max(1) as f64;
             let t_est = if t_total > 0 {
-                format_bytes_short((t_total as f64 * (86400.0 / secs_passed)) as u64)
+                format_bytes_short(
+                    (t_total as f64 * (86400.0 / secs_passed)) as u64,
+                )
             } else {
                 "--".to_string()
             };
@@ -116,7 +173,11 @@ pub fn print_summary_table(summaries: Vec<SummaryData>, _machine_id: &str) {
     }
 }
 
-pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: usize) {
+pub fn print_history_table(
+    table: &str,
+    mut history: Vec<HistoryEntry>,
+    limit: usize,
+) {
     if history.is_empty() {
         println!("No data available.");
         return;
@@ -124,10 +185,17 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
 
     history.sort_by_key(|h| h.date);
 
-    let mut by_host_and_interface: std::collections::HashMap<String, std::collections::HashMap<String, Vec<HistoryEntry>>> = std::collections::HashMap::new();
+    let mut by_host_and_interface: std::collections::HashMap<
+        String,
+        std::collections::HashMap<String, Vec<HistoryEntry>>,
+    > = std::collections::HashMap::new();
     for entry in history {
-        by_host_and_interface.entry(entry.hostname.clone()).or_default()
-            .entry(entry.interface.clone()).or_default().push(entry);
+        by_host_and_interface
+            .entry(entry.hostname.clone())
+            .or_default()
+            .entry(entry.interface.clone())
+            .or_default()
+            .push(entry);
     }
 
     let mut hostnames: Vec<_> = by_host_and_interface.keys().cloned().collect();
@@ -158,7 +226,7 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
             };
 
             println!("\n {}  /  {}\n", iface, title);
-            
+
             let (label_header, separator_indent) = match table {
                 "hour" => ("         hour        rx      ", 5),
                 "fiveminute" => ("         time        rx      ", 5),
@@ -168,8 +236,15 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
                 _ => ("          date        rx      ", 5),
             };
 
-            println!("{}|     tx      |    total    |   avg. rate", label_header);
-            println!("{:indent$}------------------------+-------------+-------------+---------------", "", indent = separator_indent);
+            println!(
+                "{}|     tx      |    total    |   avg. rate",
+                label_header
+            );
+            println!(
+                "{:indent$}------------------------+-------------+-------------+---------------",
+                "",
+                indent = separator_indent
+            );
 
             let mut last_date = String::new();
 
@@ -180,8 +255,10 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
                 let dt_utc = DateTime::from_timestamp(entry.date, 0).unwrap();
                 let dt = dt_utc.with_timezone(&Local);
                 let date_str = dt.format("%Y-%m-%d").to_string();
-                
-                if (table == "hour" || table == "fiveminute") && date_str != last_date {
+
+                if (table == "hour" || table == "fiveminute")
+                    && date_str != last_date
+                {
                     println!("     {}", date_str);
                     last_date = date_str;
                 }
@@ -203,16 +280,30 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
                         let year = dt.year();
                         let month = dt.month();
                         let days = match month {
-                            1|3|5|7|8|10|12 => 31,
-                            4|6|9|11 => 30,
-                            2 => if (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0) { 29 } else { 28 },
+                            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+                            4 | 6 | 9 | 11 => 30,
+                            2 => {
+                                if (year % 4 == 0 && year % 100 != 0)
+                                    || (year % 400 == 0)
+                                {
+                                    29
+                                } else {
+                                    28
+                                }
+                            }
                             _ => 30,
                         };
                         days * 86400
-                    },
+                    }
                     "year" => {
-                        if (dt.year() % 4 == 0 && dt.year() % 100 != 0) || (dt.year() % 400 == 0) { 366 * 86400 } else { 365 * 86400 }
-                    },
+                        if (dt.year() % 4 == 0 && dt.year() % 100 != 0)
+                            || (dt.year() % 400 == 0)
+                        {
+                            366 * 86400
+                        } else {
+                            365 * 86400
+                        }
+                    }
                     _ => 86400,
                 };
 
@@ -224,31 +315,49 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
                 let total_str = format_bytes_short(total);
 
                 let label_part = match table {
-                    "hour" | "fiveminute" => format!("         {:<6}{:>13} ", dt.format("%H:%M"), rx_str),
-                    "month" => format!("       {:<7}    {:>10} ", label, rx_str),
+                    "hour" | "fiveminute" => format!(
+                        "         {:<6}{:>13} ",
+                        dt.format("%H:%M"),
+                        rx_str
+                    ),
+                    "month" => {
+                        format!("       {:<7}    {:>10} ", label, rx_str)
+                    }
                     "day" => format!("      {:<10}  {:>10} ", label, rx_str),
-                    "year" => format!("        {:<4}       {:>10} ", label, rx_str),
+                    "year" => {
+                        format!("        {:<4}       {:>10} ", label, rx_str)
+                    }
                     _ => format!("     {:<16} {:>10} ", label, rx_str),
                 };
 
                 if table == "hour" || table == "fiveminute" {
-                    println!("{}|  {:>10} |  {:>10} |  {:>13}", 
-                        label_part, tx_str, total_str, rate_str);
+                    println!(
+                        "{}|  {:>10} |  {:>10} |  {:>13}",
+                        label_part, tx_str, total_str, rate_str
+                    );
                 } else {
-                    println!("{}|  {:>10} |  {:>10} |    {:>11}", 
-                        label_part, tx_str, total_str, rate_str);
+                    println!(
+                        "{}|  {:>10} |  {:>10} |    {:>11}",
+                        label_part, tx_str, total_str, rate_str
+                    );
                 }
             }
 
-            println!("{:indent$}------------------------+-------------+-------------+---------------", "", indent = separator_indent);
+            println!(
+                "{:indent$}------------------------+-------------+-------------+---------------",
+                "",
+                indent = separator_indent
+            );
 
             if let Some(latest) = entries.last() {
                 let dt_utc = DateTime::from_timestamp(latest.date, 0).unwrap();
                 let dt = dt_utc.with_timezone(&Local);
-                
+
                 let is_current = match table {
                     "day" => dt.date_naive() == now.date_naive(),
-                    "month" => dt.year() == now.year() && dt.month() == now.month(),
+                    "month" => {
+                        dt.year() == now.year() && dt.month() == now.month()
+                    }
                     "year" => dt.year() == now.year(),
                     _ => false,
                 };
@@ -256,33 +365,81 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
                 if is_current {
                     let (secs_passed, total_secs) = match table {
                         "day" => {
-                            let today_start = now.date_naive().and_hms_opt(0, 0, 0).unwrap();
-                            let start_ts = Local.from_local_datetime(&today_start).unwrap().timestamp();
+                            let today_start =
+                                now.date_naive().and_hms_opt(0, 0, 0).unwrap();
+                            let start_ts = Local
+                                .from_local_datetime(&today_start)
+                                .unwrap()
+                                .timestamp();
                             ((now_ts - start_ts).max(1) as f64, 86400.0)
-                        },
+                        }
                         "month" => {
-                            let month_start = now.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-                            let start_ts = Local.from_local_datetime(&month_start).unwrap().timestamp();
+                            let month_start = now
+                                .date_naive()
+                                .with_day(1)
+                                .unwrap()
+                                .and_hms_opt(0, 0, 0)
+                                .unwrap();
+                            let start_ts = Local
+                                .from_local_datetime(&month_start)
+                                .unwrap()
+                                .timestamp();
                             let days = match now.month() {
-                                1|3|5|7|8|10|12 => 31,
-                                4|6|9|11 => 30,
-                                2 => if (now.year() % 4 == 0 && now.year() % 100 != 0) || (now.year() % 400 == 0) { 29 } else { 28 },
+                                1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+                                4 | 6 | 9 | 11 => 30,
+                                2 => {
+                                    if (now.year() % 4 == 0
+                                        && now.year() % 100 != 0)
+                                        || (now.year() % 400 == 0)
+                                    {
+                                        29
+                                    } else {
+                                        28
+                                    }
+                                }
                                 _ => 30,
                             };
-                            ((now_ts - start_ts).max(1) as f64, (days * 86400) as f64)
-                        },
+                            (
+                                (now_ts - start_ts).max(1) as f64,
+                                (days * 86400) as f64,
+                            )
+                        }
                         "year" => {
-                            let year_start = now.date_naive().with_month(1).unwrap().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-                            let start_ts = Local.from_local_datetime(&year_start).unwrap().timestamp();
-                            let days = if (now.year() % 4 == 0 && now.year() % 100 != 0) || (now.year() % 400 == 0) { 366 } else { 365 };
-                            ((now_ts - start_ts).max(1) as f64, (days * 86400) as f64)
-                        },
+                            let year_start = now
+                                .date_naive()
+                                .with_month(1)
+                                .unwrap()
+                                .with_day(1)
+                                .unwrap()
+                                .and_hms_opt(0, 0, 0)
+                                .unwrap();
+                            let start_ts = Local
+                                .from_local_datetime(&year_start)
+                                .unwrap()
+                                .timestamp();
+                            let days = if (now.year() % 4 == 0
+                                && now.year() % 100 != 0)
+                                || (now.year() % 400 == 0)
+                            {
+                                366
+                            } else {
+                                365
+                            };
+                            (
+                                (now_ts - start_ts).max(1) as f64,
+                                (days * 86400) as f64,
+                            )
+                        }
                         _ => (1.0, 1.0),
                     };
 
                     if total_secs > 1.0 {
-                        let est_rx = (latest.rx as f64 * (total_secs / secs_passed)) as u64;
-                        let est_tx = (latest.tx as f64 * (total_secs / secs_passed)) as u64;
+                        let est_rx = (latest.rx as f64
+                            * (total_secs / secs_passed))
+                            as u64;
+                        let est_tx = (latest.tx as f64
+                            * (total_secs / secs_passed))
+                            as u64;
                         let est_total = est_rx + est_tx;
 
                         let rx_str = format_bytes_short(est_rx);
@@ -291,15 +448,27 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
                         let label = "estimated";
 
                         let label_part = match table {
-                            "hour" | "fiveminute" => format!("         {:<6}{:>13} ", label, rx_str),
-                            "month" => format!("       {:<7}    {:>10} ", label, rx_str),
-                            "day" => format!("      {:<10}  {:>10} ", label, rx_str),
-                            "year" => format!("        {:<4}       {:>10} ", label, rx_str),
+                            "hour" | "fiveminute" => {
+                                format!("         {:<6}{:>13} ", label, rx_str)
+                            }
+                            "month" => format!(
+                                "       {:<7}    {:>10} ",
+                                label, rx_str
+                            ),
+                            "day" => {
+                                format!("      {:<10}  {:>10} ", label, rx_str)
+                            }
+                            "year" => format!(
+                                "        {:<4}       {:>10} ",
+                                label, rx_str
+                            ),
                             _ => format!("     {:<16} {:>10} ", label, rx_str),
                         };
 
-                        println!("{}|  {:>10} |  {:>10} |", 
-                            label_part, tx_str, total_str);
+                        println!(
+                            "{}|  {:>10} |  {:>10} |",
+                            label_part, tx_str, total_str
+                        );
                     }
                 }
             }
@@ -310,58 +479,122 @@ pub fn print_history_table(table: &str, mut history: Vec<HistoryEntry>, limit: u
 pub fn print_95th_table(data: NintyFifthData, five_minute_hours: u32) {
     let now = Local::now();
     let days_in_month = match now.month() {
-        1|3|5|7|8|10|12 => 31,
-        4|6|9|11 => 30,
-        2 => if (now.year() % 4 == 0 && now.year() % 100 != 0) || (now.year() % 400 == 0) { 29 } else { 28 },
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (now.year() % 4 == 0 && now.year() % 100 != 0)
+                || (now.year() % 400 == 0)
+            {
+                29
+            } else {
+                28
+            }
+        }
         _ => 30,
     };
     let required_hours = days_in_month * 24;
 
     if five_minute_hours < required_hours {
-        println!("\nWarning: Configuration \"5MinuteHours\" needs to be at least {} for 100% coverage.", required_hours);
-        println!("         \"5MinuteHours\" is currently set at {}.\n", five_minute_hours);
+        println!(
+            "\nWarning: Configuration \"5MinuteHours\" needs to be at least {} for 100% coverage.",
+            required_hours
+        );
+        println!(
+            "         \"5MinuteHours\" is currently set at {}.\n",
+            five_minute_hours
+        );
     }
 
-    println!(" {}  /  95th percentile ({})\n", data.interface, Local::now().format("%Z"));
-    
-    let begin_dt = DateTime::from_timestamp(data.begin, 0).unwrap().with_timezone(&Local);
-    let end_dt = DateTime::from_timestamp(data.end, 0).unwrap().with_timezone(&Local);
-    
-    println!(" {} - {} ({} entries, {:.1}% coverage)\n", 
-        begin_dt.format("%Y-%m-%d %H:%M"), 
+    println!(
+        " {}  /  95th percentile ({})\n",
+        data.interface,
+        Local::now().format("%Z")
+    );
+
+    let begin_dt = DateTime::from_timestamp(data.begin, 0)
+        .unwrap()
+        .with_timezone(&Local);
+    let end_dt = DateTime::from_timestamp(data.end, 0)
+        .unwrap()
+        .with_timezone(&Local);
+
+    println!(
+        " {} - {} ({} entries, {:.1}% coverage)\n",
+        begin_dt.format("%Y-%m-%d %H:%M"),
         end_dt.format("%Y-%m-%d %H:%M"),
-        data.count, data.coverage);
+        data.count,
+        data.coverage
+    );
 
     println!("                          rx       |       tx       |     total");
-    println!("       ----------------------------+----------------+---------------");
+    println!(
+        "       ----------------------------+----------------+---------------"
+    );
 
     let calculate_stats = |v: &[u64]| -> (f64, f64, f64, f64) {
-        if v.is_empty() { return (0.0, 0.0, 0.0, 0.0); }
+        if v.is_empty() {
+            return (0.0, 0.0, 0.0, 0.0);
+        }
         let mut sorted = v.to_vec();
         sorted.sort();
-        
+
         let min = sorted[0] as f64;
-        let max = sorted[sorted.len()-1] as f64;
+        let max = sorted[sorted.len() - 1] as f64;
         let avg = v.iter().sum::<u64>() as f64 / v.len() as f64;
-        
+
         let idx = (0.95 * (sorted.len() as f64 - 1.0)) as usize;
         let ninty_fifth = sorted[idx] as f64;
-        
+
         // Data is in bytes per 5 minutes. Convert to bits per second.
-        (min * 8.0 / 300.0, avg * 8.0 / 300.0, max * 8.0 / 300.0, ninty_fifth * 8.0 / 300.0)
+        (
+            min * 8.0 / 300.0,
+            avg * 8.0 / 300.0,
+            max * 8.0 / 300.0,
+            ninty_fifth * 8.0 / 300.0,
+        )
     };
 
     let (rx_min, rx_avg, rx_max, rx_95) = calculate_stats(&data.rx);
     let (tx_min, tx_avg, tx_max, tx_95) = calculate_stats(&data.tx);
-    
-    let total_v: Vec<u64> = data.rx.iter().zip(data.tx.iter()).map(|(r, t)| r + t).collect();
+
+    let total_v: Vec<u64> = data
+        .rx
+        .iter()
+        .zip(data.tx.iter())
+        .map(|(r, t)| r + t)
+        .collect();
     let (total_min, total_avg, total_max, total_95) = calculate_stats(&total_v);
 
-    println!("       {:<12} {:>14} | {:>14} | {:>14}", "minimum", format_rate(rx_min), format_rate(tx_min), format_rate(total_min));
-    println!("       {:<12} {:>14} | {:>14} | {:>14}", "average", format_rate(rx_avg), format_rate(tx_avg), format_rate(total_avg));
-    println!("       {:<12} {:>14} | {:>14} | {:>14}", "maximum", format_rate(rx_max), format_rate(tx_max), format_rate(total_max));
-    println!("       ----------------------------+----------------+---------------");
-    println!("        95th %      {:>14} | {:>14} | {:>14}", format_rate(rx_95), format_rate(tx_95), format_rate(total_95));
+    println!(
+        "       {:<12} {:>14} | {:>14} | {:>14}",
+        "minimum",
+        format_rate(rx_min),
+        format_rate(tx_min),
+        format_rate(total_min)
+    );
+    println!(
+        "       {:<12} {:>14} | {:>14} | {:>14}",
+        "average",
+        format_rate(rx_avg),
+        format_rate(tx_avg),
+        format_rate(total_avg)
+    );
+    println!(
+        "       {:<12} {:>14} | {:>14} | {:>14}",
+        "maximum",
+        format_rate(rx_max),
+        format_rate(tx_max),
+        format_rate(total_max)
+    );
+    println!(
+        "       ----------------------------+----------------+---------------"
+    );
+    println!(
+        "        95th %      {:>14} | {:>14} | {:>14}",
+        format_rate(rx_95),
+        format_rate(tx_95),
+        format_rate(total_95)
+    );
 }
 
 pub fn print_hours_graph(history: Vec<HistoryEntry>) {
@@ -381,32 +614,41 @@ pub fn print_hours_graph(history: Vec<HistoryEntry>) {
     for i in 0..24 {
         let h_dt = now - chrono::Duration::hours((23 - i) as i64);
         hour_labels[i] = h_dt.hour();
-        
+
         let h_start = h_dt.date_naive().and_hms_opt(h_dt.hour(), 0, 0).unwrap();
         let h_ts = Local.from_local_datetime(&h_start).unwrap().timestamp();
-        
+
         if let Some(entry) = history.iter().find(|e| e.date == h_ts) {
             hours_data[i] = (entry.rx, entry.tx);
         }
     }
 
-    println!("\n {:<70} {:>5}\n", format!(" {} ({})", interface, tz_suffix), now.format("%H:%M"));
+    println!(
+        "\n {:<70} {:>5}\n",
+        format!(" {} ({})", interface, tz_suffix),
+        now.format("%H:%M")
+    );
 
     // Find max value for scaling
     let max_total = hours_data.iter().map(|(r, t)| r + t).max().unwrap_or(0);
-    let scale_max = if max_total == 0 { 1024 * 1024 } else { max_total }; // Default to 1MB scale if no data
+    let scale_max = if max_total == 0 {
+        1024 * 1024
+    } else {
+        max_total
+    }; // Default to 1MB scale if no data
 
     // Draw graph (10 lines high)
     println!("  ^");
     for line in (1..=10).rev() {
         print!("  | ");
         let threshold = (scale_max as f64 * (line as f64 / 10.0)) as u64;
-        let prev_threshold = (scale_max as f64 * ((line - 1) as f64 / 10.0)) as u64;
+        let prev_threshold =
+            (scale_max as f64 * ((line - 1) as f64 / 10.0)) as u64;
 
         for i in 0..24 {
             let (rx, tx) = hours_data[i];
             let total = rx + tx;
-            
+
             if total >= threshold {
                 // If this is the 'top' of the bar, decide character
                 // Standard vnstat uses 'r', 't', 's'
@@ -428,7 +670,9 @@ pub fn print_hours_graph(history: Vec<HistoryEntry>) {
     }
 
     print!(" -+");
-    for _ in 0..24 { print!("---"); }
+    for _ in 0..24 {
+        print!("---");
+    }
     println!(">");
 
     print!("  | ");
@@ -438,8 +682,10 @@ pub fn print_hours_graph(history: Vec<HistoryEntry>) {
     println!("\n");
 
     // Print summary table (3 columns)
-    println!(" h  rx (MiB)   tx (MiB)  ][  h  rx (MiB)   tx (MiB)  ][  h  rx (MiB)   tx (MiB)");
-    
+    println!(
+        " h  rx (MiB)   tx (MiB)  ][  h  rx (MiB)   tx (MiB)  ][  h  rx (MiB)   tx (MiB)"
+    );
+
     // Helper to format with real commas if possible, or just space it
     let format_mib = |bytes: u64| -> String {
         let mib = bytes as f64 / (1024.0 * 1024.0);
@@ -447,7 +693,7 @@ pub fn print_hours_graph(history: Vec<HistoryEntry>) {
         let parts: Vec<&str> = s.split('.').collect();
         let int_part = parts[0];
         let dec_part = parts[1];
-        
+
         let mut result = String::new();
         let mut count = 0;
         for c in int_part.chars().rev() {
@@ -457,22 +703,36 @@ pub fn print_hours_graph(history: Vec<HistoryEntry>) {
             result.push(c);
             count += 1;
         }
-        format!("{:>10}", format!("{}.{}", result.chars().rev().collect::<String>(), dec_part))
+        format!(
+            "{:>10}",
+            format!(
+                "{}.{}",
+                result.chars().rev().collect::<String>(),
+                dec_part
+            )
+        )
     };
 
     for i in 0..8 {
         let idx1 = i;
         let idx2 = i + 8;
         let idx3 = i + 16;
-        
+
         let (r1, t1) = hours_data[idx1];
         let (r2, t2) = hours_data[idx2];
         let (r3, t3) = hours_data[idx3];
-        
-        println!("{:02} {} {} ][ {:02} {} {} ][ {:02} {} {}", 
-            hour_labels[idx1], format_mib(r1), format_mib(t1),
-            hour_labels[idx2], format_mib(r2), format_mib(t2),
-            hour_labels[idx3], format_mib(r3), format_mib(t3)
+
+        println!(
+            "{:02} {} {} ][ {:02} {} {} ][ {:02} {} {}",
+            hour_labels[idx1],
+            format_mib(r1),
+            format_mib(t1),
+            hour_labels[idx2],
+            format_mib(r2),
+            format_mib(t2),
+            hour_labels[idx3],
+            format_mib(r3),
+            format_mib(t3)
         );
     }
     println!();
@@ -552,7 +812,9 @@ pub fn format_relative_time(ts: i64) -> String {
     format!("{}y ago", years)
 }
 
-pub fn print_hosts_table(hosts: Vec<(String, String, Option<String>, Option<i64>, Option<i64>)>) {
+pub fn print_hosts_table(
+    hosts: Vec<(String, String, Option<String>, Option<i64>, Option<i64>)>,
+) {
     if hosts.is_empty() {
         println!("No hosts found.");
         return;
@@ -574,21 +836,43 @@ pub fn print_hosts_table(hosts: Vec<(String, String, Option<String>, Option<i64>
     name_width = name_width.max(header_name.len());
     ver_width = ver_width.max(header_ver.len());
 
-    println!("{:<nw$}   {:<vw$}   {:<19}   {:<15}", 
-        header_name, header_ver, header_started, header_last, 
-        nw = name_width, vw = ver_width);
-    println!("{:-<total_w$}", "", total_w = name_width + ver_width + 19 + 15 + 9);
+    println!(
+        "{:<nw$}   {:<vw$}   {:<19}   {:<15}",
+        header_name,
+        header_ver,
+        header_started,
+        header_last,
+        nw = name_width,
+        vw = ver_width
+    );
+    println!(
+        "{:-<total_w$}",
+        "",
+        total_w = name_width + ver_width + 19 + 15 + 9
+    );
 
     for (name, _id, ver, started, last_seen) in hosts {
-        let started_str = started.map(|ts| {
-            let dt = DateTime::from_timestamp(ts, 0).unwrap();
-            dt.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S").to_string()
-        }).unwrap_or_else(|| "unknown".to_string());
+        let started_str = started
+            .map(|ts| {
+                let dt = DateTime::from_timestamp(ts, 0).unwrap();
+                dt.with_timezone(&Local)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "unknown".to_string());
 
-        let last_seen_str = last_seen.map(format_relative_time).unwrap_or_else(|| "never".to_string());
+        let last_seen_str = last_seen
+            .map(format_relative_time)
+            .unwrap_or_else(|| "never".to_string());
 
-        println!("{:<nw$}   {:<vw$}   {:<19}   {:<15}", 
-            name, ver.unwrap_or_else(|| "unknown".to_string()), started_str, last_seen_str,
-            nw = name_width, vw = ver_width);
+        println!(
+            "{:<nw$}   {:<vw$}   {:<19}   {:<15}",
+            name,
+            ver.unwrap_or_else(|| "unknown".to_string()),
+            started_str,
+            last_seen_str,
+            nw = name_width,
+            vw = ver_width
+        );
     }
 }

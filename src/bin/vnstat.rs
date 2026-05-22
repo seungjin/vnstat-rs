@@ -1,19 +1,25 @@
-use anyhow::{Result};
-use clap::{Parser};
-use std::path::{PathBuf};
-use tokio::net::UnixStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use vnstat_rs::{Db, IpcRequest, IpcResponse, print_summary_table, print_history_table, print_95th_table, print_hosts_table, format_rate};
+use anyhow::Result;
 use chrono::{Local, TimeZone};
+use clap::Parser;
+use std::path::PathBuf;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixStream;
+use vnstat_rs::{
+    Db, IpcRequest, IpcResponse, format_rate, print_95th_table,
+    print_history_table, print_hosts_table, print_summary_table,
+};
 
-async fn request_daemon(socket_path: &PathBuf, req: IpcRequest) -> Result<IpcResponse> {
+async fn request_daemon(
+    socket_path: &PathBuf,
+    req: IpcRequest,
+) -> Result<IpcResponse> {
     let mut stream = UnixStream::connect(socket_path).await?;
     let req_json = serde_json::to_vec(&req)?;
     stream.write_all(&req_json).await?;
-    
+
     let mut response_buffer = Vec::new();
     stream.read_to_end(&mut response_buffer).await?;
-    
+
     let resp: IpcResponse = serde_json::from_slice(&response_buffer)?;
     Ok(resp)
 }
@@ -21,11 +27,24 @@ async fn request_daemon(socket_path: &PathBuf, req: IpcRequest) -> Result<IpcRes
 fn parse_date_arg(date_str: &str) -> Option<i64> {
     // Try YYYY-MM-DD
     if let Ok(ndt) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-        return Some(Local.from_local_datetime(&ndt.and_hms_opt(0, 0, 0).unwrap()).unwrap().timestamp());
+        return Some(
+            Local
+                .from_local_datetime(&ndt.and_hms_opt(0, 0, 0).unwrap())
+                .unwrap()
+                .timestamp(),
+        );
     }
     // Try YYYY-MM
-    if let Ok(ndt) = chrono::NaiveDate::parse_from_str(&format!("{}-01", date_str), "%Y-%m-%d") {
-        return Some(Local.from_local_datetime(&ndt.and_hms_opt(0, 0, 0).unwrap()).unwrap().timestamp());
+    if let Ok(ndt) = chrono::NaiveDate::parse_from_str(
+        &format!("{}-01", date_str),
+        "%Y-%m-%d",
+    ) {
+        return Some(
+            Local
+                .from_local_datetime(&ndt.and_hms_opt(0, 0, 0).unwrap())
+                .unwrap()
+                .timestamp(),
+        );
     }
     None
 }
@@ -33,8 +52,13 @@ fn parse_date_arg(date_str: &str) -> Option<i64> {
 async fn run_live(iface: Option<String>) -> Result<()> {
     let stats = vnstat_rs::parse_net_dev()?;
     let selected_iface = if let Some(filter) = iface {
-        stats.iter().find(|s| s.name == filter).map(|s| s.name.clone())
-            .ok_or_else(|| anyhow::anyhow!("Interface \"{}\" not found.", filter))?
+        stats
+            .iter()
+            .find(|s| s.name == filter)
+            .map(|s| s.name.clone())
+            .ok_or_else(|| {
+                anyhow::anyhow!("Interface \"{}\" not found.", filter)
+            })?
     } else {
         // Priority selection:
         // 1. Physical interfaces (< 100) with traffic
@@ -43,14 +67,14 @@ async fn run_live(iface: Option<String>) -> Result<()> {
         // 4. Any virtual interface (not 101)
         // 5. lo (101) with traffic
         // 6. lo
-        
+
         let mut sorted_stats = stats.clone();
         sorted_stats.sort_by(|a, b| {
             let a_type = a.interface_type.unwrap_or(0);
             let b_type = b.interface_type.unwrap_or(0);
             let a_has_traffic = a.rx_bytes > 0 || a.tx_bytes > 0;
             let b_has_traffic = b.rx_bytes > 0 || b.tx_bytes > 0;
-            
+
             let score = |itype: u8, has_traffic: bool| -> i32 {
                 if itype < 100 {
                     if has_traffic { 0 } else { 1 }
@@ -60,18 +84,21 @@ async fn run_live(iface: Option<String>) -> Result<()> {
                     if has_traffic { 4 } else { 5 }
                 }
             };
-            
+
             score(a_type, a_has_traffic).cmp(&score(b_type, b_has_traffic))
         });
-        
-        sorted_stats.first()
+
+        sorted_stats
+            .first()
             .map(|s| s.name.clone())
             .ok_or_else(|| anyhow::anyhow!("No network interfaces found."))?
     };
 
-    let selected_stats = stats.iter().find(|s| s.name == selected_iface).unwrap();
-    println!("Monitoring {} ({}) ...    (press CTRL-C to stop)", 
-        selected_iface, 
+    let selected_stats =
+        stats.iter().find(|s| s.name == selected_iface).unwrap();
+    println!(
+        "Monitoring {} ({}) ...    (press CTRL-C to stop)",
+        selected_iface,
         vnstat_rs::format_interface_type(selected_stats.interface_type)
     );
     println!();
@@ -80,7 +107,7 @@ async fn run_live(iface: Option<String>) -> Result<()> {
     let mut last_stats = start_stats.clone();
     let start_time = std::time::Instant::now();
     let mut first_iteration = true;
-    
+
     let mut max_rx_bps = 0.0;
     let mut max_tx_bps = 0.0;
     let mut total_rx_bytes = 0;
@@ -94,24 +121,24 @@ async fn run_live(iface: Option<String>) -> Result<()> {
                 println!("\n");
                 let duration = start_time.elapsed();
                 let secs = duration.as_secs_f64();
-                
+
                 if secs >= 1.0 {
                     println!(" {}  /  traffic statistics", selected_iface);
                     println!();
                     println!("                           rx         |       tx");
                     println!("--------------------------------------+------------------");
-                    println!("  bytes                {:>12}   |  {:>12}", 
-                        vnstat_rs::format_bytes(total_rx_bytes), 
+                    println!("  bytes                {:>12}   |  {:>12}",
+                        vnstat_rs::format_bytes(total_rx_bytes),
                         vnstat_rs::format_bytes(total_tx_bytes));
                     println!("--------------------------------------+------------------");
                     println!("  max                {:>15} |  {:>15}", format_rate(max_rx_bps), format_rate(max_tx_bps));
-                    println!("  average            {:>15} |  {:>15}", 
+                    println!("  average            {:>15} |  {:>15}",
                         format_rate((total_rx_bytes as f64 * 8.0) / secs),
                         format_rate((total_tx_bytes as f64 * 8.0) / secs));
                     println!("--------------------------------------+------------------");
                     println!("  packets              {:>12}   |  {:>12}", total_rx_packets, total_tx_packets);
                     println!("--------------------------------------+------------------");
-                    println!("  average p/s          {:>10}     |  {:>10}", 
+                    println!("  average p/s          {:>10}     |  {:>10}",
                         (total_rx_packets as f64 / secs) as u64,
                         (total_tx_packets as f64 / secs) as u64);
                     println!("--------------------------------------+------------------");
@@ -123,7 +150,7 @@ async fn run_live(iface: Option<String>) -> Result<()> {
                 let current_stats_all = vnstat_rs::parse_net_dev()?;
                 let curr = current_stats_all.into_iter().find(|s| s.name == selected_iface)
                     .ok_or_else(|| anyhow::anyhow!("Interface {} disappeared", selected_iface))?;
-                
+
                 if !first_iteration {
                     print!("\x1B[1A");
                 }
@@ -133,7 +160,7 @@ async fn run_live(iface: Option<String>) -> Result<()> {
                 let tx_bytes_delta = if curr.tx_bytes >= last_stats.tx_bytes { curr.tx_bytes - last_stats.tx_bytes } else { 0 };
                 let rx_packets_delta = if curr.rx_packets >= last_stats.rx_packets { curr.rx_packets - last_stats.rx_packets } else { 0 };
                 let tx_packets_delta = if curr.tx_packets >= last_stats.tx_packets { curr.tx_packets - last_stats.tx_packets } else { 0 };
-                
+
                 let rx_bps = rx_bytes_delta as f64 * 8.0;
                 let tx_bps = tx_bytes_delta as f64 * 8.0;
 
@@ -144,7 +171,7 @@ async fn run_live(iface: Option<String>) -> Result<()> {
                 total_rx_packets += rx_packets_delta;
                 total_tx_packets += tx_packets_delta;
 
-                println!("   rx: {:>15} {:>5} p/s          tx: {:>15} {:>5} p/s\x1B[K", 
+                println!("   rx: {:>15} {:>5} p/s          tx: {:>15} {:>5} p/s\x1B[K",
                     format_rate(rx_bps), rx_packets_delta, format_rate(tx_bps), tx_packets_delta);
 
                 last_stats = curr.clone();
@@ -157,9 +184,9 @@ async fn run_live(iface: Option<String>) -> Result<()> {
 
 #[derive(Parser)]
 #[command(
-    author, 
-    about = "A Rust port of vnStat", 
-    long_about = None, 
+    author,
+    about = "A Rust port of vnStat",
+    long_about = None,
     disable_help_flag = true,
     disable_version_flag = true
 )]
@@ -191,6 +218,10 @@ struct Cli {
     /// Show statistics for all hosts
     #[arg(long)]
     all_hosts: bool,
+
+    /// Show all interfaces (including inactive ones)
+    #[arg(long)]
+    all_interfaces: bool,
 
     /// List all hosts in database
     #[arg(long)]
@@ -284,7 +315,6 @@ struct Cli {
     #[arg(short = 'c', long, value_name = "file")]
     config: Option<PathBuf>,
 
-
     /// Add interface to database
     #[arg(long, value_name = "iface")]
     add: Option<String>,
@@ -324,9 +354,12 @@ fn print_help() {
     println!("      --oneline [mode]             show simple parsable format");
     println!("      --json [mode] [limit]        show database in json format");
     println!("      --xml [mode] [limit]         show database in xml format");
+    println!("      --all-interfaces             show all interfaces");
     println!();
     println!("      -tr, --tr [time]             calculate traffic");
-    println!("      -l,  --live [mode]           show transfer rate in real time");
+    println!(
+        "      -l,  --live [mode]           show transfer rate in real time"
+    );
     println!("      -i,  --iface <interface>     select interface");
     println!();
     println!("Use \"--longhelp\" for complete list of options.");
@@ -349,10 +382,13 @@ fn print_longhelp() {
     println!("      --oneline [mode]             show simple parsable format");
     println!("      --json [mode] [limit]        show database in json format");
     println!("      --xml [mode] [limit]         show database in xml format");
+    println!("      --all-interfaces             show all interfaces (including inactive)");
     println!();
     println!("Modify:");
     println!("      --add <iface>                add interface to database");
-    println!("      --remove <iface>             remove interface from database");
+    println!(
+        "      --remove <iface>             remove interface from database"
+    );
     println!("      --rename <old> <new>         rename interface in database");
     println!("      --setalias <alias>           set alias for interface");
     println!();
@@ -361,9 +397,13 @@ fn print_longhelp() {
     println!("      -?,  --help                  show short help");
     println!("      -V,  --version               show version");
     println!("      -tr, --tr [time]             calculate traffic");
-    println!("      -l,  --live [mode]           show transfer rate in real time");
+    println!(
+        "      -l,  --live [mode]           show transfer rate in real time"
+    );
     println!("      --limit <limit>              set output entry limit");
-    println!("      --iflist                     show list of available interfaces");
+    println!(
+        "      --iflist                     show list of available interfaces"
+    );
     println!("      -D,  --dbdir <file>          select database directory");
     println!("      -n,  --config <file>         select config file");
     println!("      --longhelp                   show this help");
@@ -384,10 +424,15 @@ async fn main() -> Result<()> {
     }
 
     if cli.version {
-        println!("vnStat-rs {} ({}) by Seungjin Kim", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
-        
+        println!(
+            "vnStat-rs {} ({}) by Seungjin Kim",
+            env!("CARGO_PKG_VERSION"),
+            env!("GIT_HASH")
+        );
+
         let file_config = if let Some(ref path) = cli.config {
-            vnstat_rs::load_config(path).unwrap_or_else(|_| vnstat_rs::load_best_config())
+            vnstat_rs::load_config(path)
+                .unwrap_or_else(|_| vnstat_rs::load_best_config())
         } else {
             vnstat_rs::load_best_config()
         };
@@ -399,23 +444,21 @@ async fn main() -> Result<()> {
         if let Some(ref socket_path) = file_config.daemon_socket {
             tried_paths.push(socket_path.clone());
         }
-        
+
         // Add common fallbacks if they aren't already there
-        let fallbacks = [
-            "/run/vnstat-rs.sock",
-            "/var/run/vnstat-rs.sock",
-        ];
+        let fallbacks = ["/run/vnstat-rs.sock", "/var/run/vnstat-rs.sock"];
         for f in fallbacks {
             let p = PathBuf::from(f);
             if !tried_paths.contains(&p) {
                 tried_paths.push(p);
             }
         }
-        
+
         // Add user fallback if not already there
         let home = std::env::var("HOME").unwrap_or_default();
         if !home.is_empty() {
-            let p = PathBuf::from(home).join(".local/share/vnstat-rs/vnstat-rs.sock");
+            let p = PathBuf::from(home)
+                .join(".local/share/vnstat-rs/vnstat-rs.sock");
             if !tried_paths.contains(&p) {
                 tried_paths.push(p);
             }
@@ -423,7 +466,13 @@ async fn main() -> Result<()> {
 
         for socket_path in tried_paths {
             if socket_path.exists() {
-                if let Ok(IpcResponse::Info { version, local_schema, remote_schema, .. }) = request_daemon(&socket_path, IpcRequest::GetInfo).await {
+                if let Ok(IpcResponse::Info {
+                    version,
+                    local_schema,
+                    remote_schema,
+                    ..
+                }) = request_daemon(&socket_path, IpcRequest::GetInfo).await
+                {
                     println!("vnStatd-rs version: {}", version);
                     println!("Local DB Schema: v{}", local_schema);
                     if let Some(v) = remote_schema {
@@ -437,18 +486,34 @@ async fn main() -> Result<()> {
 
         if !daemon_connected {
             println!("vnStatd-rs: not running");
-            
+
             // Try to open DB directly to get schema versions (no init to avoid side effects)
-            let db_path = cli.dbdir.clone()
+            let db_path = cli
+                .dbdir
+                .clone()
                 .or(file_config.database.clone())
-                .unwrap_or_else(|| PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
-            
+                .unwrap_or_else(|| {
+                    PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db")
+                });
+
             if db_path.exists() {
-                if let Ok(db) = Db::open_no_init(db_path, file_config.url.clone(), file_config.token.clone()).await {
-                    let local_schema = db.get_schema_version_from(&db.local_conn).await.unwrap_or(0);
+                if let Ok(db) = Db::open_no_init(
+                    db_path,
+                    file_config.url.clone(),
+                    file_config.token.clone(),
+                )
+                .await
+                {
+                    let local_schema = db
+                        .get_schema_version_from(&db.local_conn)
+                        .await
+                        .unwrap_or(0);
                     println!("Local DB Schema: v{}", local_schema);
                     if let Some(ref remote) = db.remote_conn {
-                        let remote_schema = db.get_schema_version_from(remote).await.unwrap_or(0);
+                        let remote_schema = db
+                            .get_schema_version_from(remote)
+                            .await
+                            .unwrap_or(0);
                         println!("Remote DB Schema: v{}", remote_schema);
                     }
                 }
@@ -463,11 +528,15 @@ async fn main() -> Result<()> {
     if cli.iflist {
         let mut stats = vnstat_rs::parse_net_dev()?;
         stats.retain(|s| s.rx_bytes + s.tx_bytes > 0);
-        println!("{:<15} {:<15} {:<15} {:<25}", "Interface", "RX Total", "TX Total", "Type");
+        println!(
+            "{:<15} {:<15} {:<15} {:<25}",
+            "Interface", "RX Total", "TX Total", "Type"
+        );
         for s in stats {
-            println!("{:<15} {:<15} {:<15} {:<25}", 
-                s.name, 
-                vnstat_rs::format_bytes(s.rx_bytes), 
+            println!(
+                "{:<15} {:<15} {:<15} {:<25}",
+                s.name,
+                vnstat_rs::format_bytes(s.rx_bytes),
                 vnstat_rs::format_bytes(s.tx_bytes),
                 vnstat_rs::format_interface_type(s.interface_type)
             );
@@ -483,16 +552,22 @@ async fn main() -> Result<()> {
     let is_root = unsafe { libc::getuid() == 0 };
     let etc_config = PathBuf::from("/etc/vnstat-rs/vnstat-rs.conf");
     let home = std::env::var("HOME").unwrap_or_default();
-    let user_config = PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
+    let user_config =
+        PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
 
-    let filter_type: Option<u8> = if cli.only_physical { Some(0) } else { None };
+    let filter_type: Option<u8> =
+        if cli.only_physical { Some(254) } else { None };
 
     let file_config = if let Some(ref path) = cli.config {
         let expanded_path = vnstat_rs::expand_tilde(path);
         match vnstat_rs::load_config(&expanded_path) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("Error loading config {}: {}", expanded_path.display(), e);
+                eprintln!(
+                    "Error loading config {}: {}",
+                    expanded_path.display(),
+                    e
+                );
                 std::process::exit(1);
             }
         }
@@ -502,14 +577,14 @@ async fn main() -> Result<()> {
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
                 match vnstat_rs::load_config(&user_config) {
                     Ok(c) => c,
-                    Err(_) => vnstat_rs::get_default_config(is_root)
+                    Err(_) => vnstat_rs::get_default_config(is_root),
                 }
             }
             Err(_) => {
                 if !is_root {
                     match vnstat_rs::load_config(&user_config) {
                         Ok(c) => c,
-                        Err(_) => vnstat_rs::get_default_config(is_root)
+                        Err(_) => vnstat_rs::get_default_config(is_root),
                     }
                 } else {
                     vnstat_rs::get_default_config(is_root)
@@ -517,80 +592,120 @@ async fn main() -> Result<()> {
             }
         }
     };
-    
+
     // Determine output format
-    enum OutputFormat { Table, Json, Xml, Oneline }
-    let format = if cli.json.is_some() { OutputFormat::Json }
-        else if cli.xml.is_some() { OutputFormat::Xml }
-        else if cli.oneline.is_some() { OutputFormat::Oneline }
-        else { OutputFormat::Table };
+    enum OutputFormat {
+        Table,
+        Json,
+        Xml,
+        Oneline,
+    }
+    let format = if cli.json.is_some() {
+        OutputFormat::Json
+    } else if cli.xml.is_some() {
+        OutputFormat::Xml
+    } else if cli.oneline.is_some() {
+        OutputFormat::Oneline
+    } else {
+        OutputFormat::Table
+    };
 
     // Use machine_id as the default filter for current host
     let current_machine_id = vnstat_rs::get_machine_id().ok();
-    let host_filter_ipc = if cli.all_hosts { None } else { cli.host.clone().or_else(|| current_machine_id.clone()) };
+    let host_filter_ipc = if cli.all_hosts {
+        None
+    } else {
+        cli.host.clone().or_else(|| current_machine_id.clone())
+    };
+
+    let active_only = !cli.all_interfaces;
 
     // Try to talk to daemon first
     if let Some(ref socket_path) = file_config.daemon_socket {
         if socket_path.exists() {
             let mut requested_table = String::new();
             let mut requested_limit = 0;
-            let req = if cli.add.is_some() || cli.remove.is_some() || cli.rename.is_some() || cli.setalias.is_some() {
+            let req = if cli.add.is_some()
+                || cli.remove.is_some()
+                || cli.rename.is_some()
+                || cli.setalias.is_some()
+            {
                 None
             } else if cli.info {
                 Some(IpcRequest::GetInfo)
             } else if cli.host_list {
-                Some(IpcRequest::ListHosts { host: cli.host.clone() })
+                Some(IpcRequest::ListHosts {
+                    host: cli.host.clone(),
+                })
             } else if cli.hoursgraph {
-                Some(IpcRequest::GetHistory { 
-                    table: "hour".to_string(), 
-                    interface: cli.iface.clone(), 
+                Some(IpcRequest::GetHistory {
+                    table: "hour".to_string(),
+                    interface: cli.iface.clone(),
                     host: host_filter_ipc.clone(),
                     filter_type,
+                    active_only,
                     limit: 24,
                     begin: None,
                     end: None,
                 })
             } else if cli.nintyfifth {
-                Some(IpcRequest::Get95th { 
-                    interface: cli.iface.clone(), 
+                Some(IpcRequest::Get95th {
+                    interface: cli.iface.clone(),
                     host: host_filter_ipc.clone(),
                     filter_type,
+                    active_only,
                 })
-            } else if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
-                let (table, default_limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(24)) }
-                    else if let Some(l) = cli.hours { ("hour", l.unwrap_or(24)) }
-                    else if let Some(l) = cli.days { ("day", l.unwrap_or(30)) }
-                    else if let Some(l) = cli.months { ("month", l.unwrap_or(12)) }
-                    else if let Some(l) = cli.years { ("year", l.unwrap_or(10)) }
-                    else { ("top", cli.top.unwrap().unwrap_or(10)) };
-                
+            } else if cli.fiveminutes.is_some()
+                || cli.hours.is_some()
+                || cli.days.is_some()
+                || cli.months.is_some()
+                || cli.years.is_some()
+                || cli.top.is_some()
+            {
+                let (table, default_limit) = if let Some(l) = cli.fiveminutes {
+                    ("fiveminute", l.unwrap_or(24))
+                } else if let Some(l) = cli.hours {
+                    ("hour", l.unwrap_or(24))
+                } else if let Some(l) = cli.days {
+                    ("day", l.unwrap_or(30))
+                } else if let Some(l) = cli.months {
+                    ("month", l.unwrap_or(12))
+                } else if let Some(l) = cli.years {
+                    ("year", l.unwrap_or(10))
+                } else {
+                    ("top", cli.top.unwrap().unwrap_or(10))
+                };
+
                 requested_table = table.to_string();
                 let limit = cli.limit.unwrap_or(default_limit);
                 requested_limit = limit;
                 let begin = cli.begin.as_deref().and_then(parse_date_arg);
                 let end = cli.end.as_deref().and_then(parse_date_arg);
 
-                Some(IpcRequest::GetHistory { 
-                    table: table.to_string(), 
-                    interface: cli.iface.clone(), 
+                Some(IpcRequest::GetHistory {
+                    table: table.to_string(),
+                    interface: cli.iface.clone(),
                     host: host_filter_ipc.clone(),
                     filter_type,
+                    active_only,
                     limit,
                     begin,
                     end,
                 })
             } else if !cli.update && !cli.init && !cli.iflist {
                 if matches!(format, OutputFormat::Table) {
-                    Some(IpcRequest::GetSummary { 
-                        interface: cli.iface.clone(), 
+                    Some(IpcRequest::GetSummary {
+                        interface: cli.iface.clone(),
                         host: host_filter_ipc.clone(),
                         filter_type,
+                        active_only,
                     })
                 } else {
-                    Some(IpcRequest::GetStats { 
-                        interface: cli.iface.clone(), 
+                    Some(IpcRequest::GetStats {
+                        interface: cli.iface.clone(),
                         host: host_filter_ipc.clone(),
                         filter_type,
+                        active_only,
                     })
                 }
             } else {
@@ -599,14 +714,42 @@ async fn main() -> Result<()> {
 
             if let Some(req) = req {
                 match request_daemon(socket_path, req).await {
-                    Ok(IpcResponse::Stats(mut stats)) => {
+                    Ok(IpcResponse::Stats {
+                        mut stats,
+                        load_average,
+                        num_cores,
+                    }) => {
                         stats.retain(|s| s.rx_bytes + s.tx_bytes > 0);
                         match format {
-                            OutputFormat::Json => println!("{}", serde_json::to_string(&vnstat_rs::VnStatJson::new(stats))?),
-                            OutputFormat::Xml => println!("{}", vnstat_rs::VnStatJson::new(stats).to_xml()),
+                            OutputFormat::Json => println!(
+                                "{}",
+                                serde_json::to_string(
+                                    &vnstat_rs::VnStatJson::new(stats)
+                                        .with_system_metrics(
+                                            load_average,
+                                            num_cores
+                                        )
+                                )?
+                            ),
+                            OutputFormat::Xml => println!(
+                                "{}",
+                                vnstat_rs::VnStatJson::new(stats)
+                                    .with_system_metrics(
+                                        load_average,
+                                        num_cores
+                                    )
+                                    .to_xml()
+                            ),
                             OutputFormat::Oneline => {
                                 for s in stats {
-                                    println!("1;{};{};{};{};{};", s.hostname, s.name, s.rx_bytes, s.tx_bytes, s.rx_bytes + s.tx_bytes);
+                                    println!(
+                                        "1;{};{};{};{};{};",
+                                        s.hostname,
+                                        s.name,
+                                        s.rx_bytes,
+                                        s.tx_bytes,
+                                        s.rx_bytes + s.tx_bytes
+                                    );
                                 }
                             }
                             OutputFormat::Table => {}
@@ -614,24 +757,62 @@ async fn main() -> Result<()> {
                         return Ok(());
                     }
                     Ok(IpcResponse::Summary(summaries)) => {
-                        print_summary_table(summaries, current_machine_id.as_deref().unwrap_or(""));
+                        print_summary_table(
+                            summaries,
+                            current_machine_id.as_deref().unwrap_or(""),
+                        );
                         return Ok(());
                     }
-                    Ok(IpcResponse::History(mut history)) => {
+                    Ok(IpcResponse::History {
+                        mut history,
+                        load_average,
+                        num_cores,
+                    }) => {
                         history.retain(|h| h.rx + h.tx > 0);
                         match format {
-                            OutputFormat::Json => println!("{}", serde_json::to_string(&vnstat_rs::VnStatJson::from_history(history, &requested_table))?),
-                            OutputFormat::Xml => println!("{}", vnstat_rs::VnStatJson::from_history(history, &requested_table).to_xml()),
+                            OutputFormat::Json => println!(
+                                "{}",
+                                serde_json::to_string(
+                                    &vnstat_rs::VnStatJson::from_history(
+                                        history,
+                                        &requested_table
+                                    )
+                                    .with_system_metrics(
+                                        load_average,
+                                        num_cores
+                                    )
+                                )?
+                            ),
+                            OutputFormat::Xml => println!(
+                                "{}",
+                                vnstat_rs::VnStatJson::from_history(
+                                    history,
+                                    &requested_table
+                                )
+                                .with_system_metrics(load_average, num_cores)
+                                .to_xml()
+                            ),
                             OutputFormat::Oneline => {
                                 for h in history {
-                                    println!("h;{};{};{};{};{};", h.hostname, h.interface, h.date, h.rx, h.tx);
+                                    println!(
+                                        "h;{};{};{};{};{};",
+                                        h.hostname,
+                                        h.interface,
+                                        h.date,
+                                        h.rx,
+                                        h.tx
+                                    );
                                 }
                             }
                             OutputFormat::Table => {
                                 if cli.hoursgraph {
                                     vnstat_rs::print_hours_graph(history);
                                 } else {
-                                    print_history_table(&requested_table, history, requested_limit);
+                                    print_history_table(
+                                        &requested_table,
+                                        history,
+                                        requested_limit,
+                                    );
                                 }
                             }
                         }
@@ -641,8 +822,18 @@ async fn main() -> Result<()> {
                         print_95th_table(data, file_config.five_minute_hours);
                         return Ok(());
                     }
-                    Ok(IpcResponse::Info { hostname, machine_id, version, local_schema, remote_schema, .. }) => {
-                        println!("vnStat-rs {} by Seungjin Kim", env!("CARGO_PKG_VERSION"));
+                    Ok(IpcResponse::Info {
+                        hostname,
+                        machine_id,
+                        version,
+                        local_schema,
+                        remote_schema,
+                        ..
+                    }) => {
+                        println!(
+                            "vnStat-rs {} by Seungjin Kim",
+                            env!("CARGO_PKG_VERSION")
+                        );
                         println!("Daemon Host: {} ({})", hostname, machine_id);
                         println!("Daemon Version: {}", version);
                         println!("Local DB Schema: v{}", local_schema);
@@ -651,6 +842,7 @@ async fn main() -> Result<()> {
                         }
                         return Ok(());
                     }
+
                     Ok(IpcResponse::Hosts(hosts)) => {
                         print_hosts_table(hosts);
                         return Ok(());
@@ -659,23 +851,30 @@ async fn main() -> Result<()> {
                         eprintln!("Daemon error: {}", e);
                     }
                     Err(e) => {
-                        eprintln!("vnstatd is not working ({:?}): {}", socket_path, e);
+                        eprintln!(
+                            "vnstatd is not working ({:?}): {}",
+                            socket_path, e
+                        );
                     }
                     _ => {}
                 }
             }
         } else {
-             // Socket doesn't exist - if not a purely local command, warn
-             if !cli.update && !cli.init && !cli.iflist {
-                 eprintln!("vnstatd is not working (socket {:?} not found). Falling back to direct database access.", socket_path);
-             }
+            // Socket doesn't exist - if not a purely local command, warn
+            if !cli.update && !cli.init && !cli.iflist {
+                eprintln!(
+                    "vnstatd is not working (socket {:?} not found). Falling back to direct database access.",
+                    socket_path
+                );
+            }
         }
     }
-    
-    let db_path = cli.dbdir
+
+    let db_path = cli
+        .dbdir
         .or(file_config.database.clone())
         .unwrap_or_else(|| PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
-    
+
     // Determine if we need a remote connection
     let (url, token) = if cli.host.is_some() || cli.all_hosts || cli.update {
         (file_config.url.clone(), file_config.token.clone())
@@ -683,11 +882,20 @@ async fn main() -> Result<()> {
         (None, None)
     };
 
-    let db = match Db::open(db_path, url, token, file_config.hostname_override.clone()).await {
+    let db = match Db::open(
+        db_path,
+        url,
+        token,
+        file_config.hostname_override.clone(),
+    )
+    .await
+    {
         Ok(db) => db,
         Err(e) => {
             if e.to_string().contains("locked") {
-                return Err(anyhow::anyhow!("Database is locked by another process (likely vnStatd-rs).\nTry starting the daemon or stopping it if you want direct access."));
+                return Err(anyhow::anyhow!(
+                    "Database is locked by another process (likely vnStatd-rs).\nTry starting the daemon or stopping it if you want direct access."
+                ));
             }
             return Err(e);
         }
@@ -695,28 +903,43 @@ async fn main() -> Result<()> {
 
     if let Some(iface) = cli.add {
         db.create_interface(&iface, 0, 0, None, None).await?;
-        println!("Interface \"{}\" added to database for host \"{}\".", iface, db.hostname);
+        println!(
+            "Interface \"{}\" added to database for host \"{}\".",
+            iface, db.hostname
+        );
         return Ok(());
     }
 
     if let Some(iface) = cli.remove {
         db.remove_interface(&iface).await?;
-        println!("Interface \"{}\" removed from database for host \"{}\".", iface, db.hostname);
+        println!(
+            "Interface \"{}\" removed from database for host \"{}\".",
+            iface, db.hostname
+        );
         return Ok(());
     }
 
     if let Some(names) = cli.rename {
         if names.len() != 2 {
-            return Err(anyhow::anyhow!("Please provide both old and new names: --rename old new"));
+            return Err(anyhow::anyhow!(
+                "Please provide both old and new names: --rename old new"
+            ));
         }
         db.rename_interface(&names[0], &names[1]).await?;
-        println!("Interface \"{}\" renamed to \"{}\" for host \"{}\".", names[0], names[1], db.hostname);
+        println!(
+            "Interface \"{}\" renamed to \"{}\" for host \"{}\".",
+            names[0], names[1], db.hostname
+        );
         return Ok(());
     }
 
     if let Some(alias) = cli.setalias {
-        let iface = cli.iface.ok_or_else(|| anyhow::anyhow!("Please specify interface with -i to set alias"))?;
-        if let Some((id, _, _, _, _, _, _, _, _)) = db.get_interface(&iface).await? {
+        let iface = cli.iface.ok_or_else(|| {
+            anyhow::anyhow!("Please specify interface with -i to set alias")
+        })?;
+        if let Some((id, _, _, _, _, _, _, _, _)) =
+            db.get_interface(&iface).await?
+        {
             db.update_interface_alias(id, &iface, &alias).await?;
             println!("Alias for interface \"{}\" set to \"{}\".", iface, alias);
         } else {
@@ -726,7 +949,10 @@ async fn main() -> Result<()> {
     }
 
     if cli.init {
-        println!("Database initialized for host: {} ({})", db.hostname, db.machine_id);
+        println!(
+            "Database initialized for host: {} ({})",
+            db.hostname, db.machine_id
+        );
         return Ok(());
     }
 
@@ -737,12 +963,20 @@ async fn main() -> Result<()> {
     }
 
     if cli.info {
-        println!("vnStat-rs {} ({}) by Seungjin Kim", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
+        println!(
+            "vnStat-rs {} ({}) by Seungjin Kim",
+            env!("CARGO_PKG_VERSION"),
+            env!("GIT_HASH")
+        );
         println!("Hostname: {}, Machine ID: {}", db.hostname, db.machine_id);
-        let local_schema = db.get_schema_version_from(&db.local_conn).await.unwrap_or(0);
+        let local_schema = db
+            .get_schema_version_from(&db.local_conn)
+            .await
+            .unwrap_or(0);
         println!("Local DB Schema: v{}", local_schema);
         if let Some(ref remote) = db.remote_conn {
-            let remote_schema = db.get_schema_version_from(remote).await.unwrap_or(0);
+            let remote_schema =
+                db.get_schema_version_from(remote).await.unwrap_or(0);
             println!("Remote DB Schema: v{}", remote_schema);
         }
         return Ok(());
@@ -753,42 +987,100 @@ async fn main() -> Result<()> {
         print_hosts_table(hosts);
         return Ok(());
     }
-    let final_host_filter = if cli.all_hosts { None } else { cli.host.as_deref().or(current_machine_id.as_deref()) };
+    let final_host_filter = if cli.all_hosts {
+        None
+    } else {
+        cli.host.as_deref().or(current_machine_id.as_deref())
+    };
 
     if cli.nintyfifth {
-        let data = db.get_95th_data(cli.iface.as_deref(), final_host_filter, filter_type).await?;
+        let data = db
+            .get_95th_data(cli.iface.as_deref(), final_host_filter, filter_type, active_only)
+            .await?;
         print_95th_table(data, file_config.five_minute_hours);
         return Ok(());
     }
 
     if cli.hoursgraph {
-        let mut history = db.get_history("hour", cli.iface.as_deref(), final_host_filter, filter_type, 24, None, None).await?;
+        let mut history = db
+            .get_history(
+                "hour",
+                cli.iface.as_deref(),
+                final_host_filter,
+                filter_type,
+                active_only,
+                24,
+                None,
+                None,
+            )
+            .await?;
         history.retain(|h| h.rx + h.tx > 0);
         vnstat_rs::print_hours_graph(history);
         return Ok(());
     }
 
-    if cli.fiveminutes.is_some() || cli.hours.is_some() || cli.days.is_some() || cli.months.is_some() || cli.years.is_some() || cli.top.is_some() {
-        let (table, default_limit) = if let Some(l) = cli.fiveminutes { ("fiveminute", l.unwrap_or(24)) }
-            else if let Some(l) = cli.hours { ("hour", l.unwrap_or(24)) }
-            else if let Some(l) = cli.days { ("day", l.unwrap_or(30)) }
-            else if let Some(l) = cli.months { ("month", l.unwrap_or(12)) }
-            else if let Some(l) = cli.years { ("year", l.unwrap_or(10)) }
-            else { ("top", cli.top.unwrap().unwrap_or(10)) };
+    if cli.fiveminutes.is_some()
+        || cli.hours.is_some()
+        || cli.days.is_some()
+        || cli.months.is_some()
+        || cli.years.is_some()
+        || cli.top.is_some()
+    {
+        let (table, default_limit) = if let Some(l) = cli.fiveminutes {
+            ("fiveminute", l.unwrap_or(24))
+        } else if let Some(l) = cli.hours {
+            ("hour", l.unwrap_or(24))
+        } else if let Some(l) = cli.days {
+            ("day", l.unwrap_or(30))
+        } else if let Some(l) = cli.months {
+            ("month", l.unwrap_or(12))
+        } else if let Some(l) = cli.years {
+            ("year", l.unwrap_or(10))
+        } else {
+            ("top", cli.top.unwrap().unwrap_or(10))
+        };
 
         let limit = cli.limit.unwrap_or(default_limit);
         let begin = cli.begin.as_deref().and_then(parse_date_arg);
         let end = cli.end.as_deref().and_then(parse_date_arg);
 
-        let mut history = db.get_history(table, cli.iface.as_deref(), final_host_filter, filter_type, limit, begin, end).await?;
+        let mut history = db
+            .get_history(
+                table,
+                cli.iface.as_deref(),
+                final_host_filter,
+                filter_type,
+                active_only,
+                limit,
+                begin,
+                end,
+            )
+            .await?;
         history.retain(|h| h.rx + h.tx > 0);
-        
+
+        let load_avg = vnstat_rs::get_load_average().ok();
+        let cores = Some(vnstat_rs::get_num_cores());
+
         match format {
-            OutputFormat::Json => println!("{}", serde_json::to_string(&vnstat_rs::VnStatJson::from_history(history, table))?),
-            OutputFormat::Xml => println!("{}", vnstat_rs::VnStatJson::from_history(history, table).to_xml()),
+            OutputFormat::Json => println!(
+                "{}",
+                serde_json::to_string(
+                    &vnstat_rs::VnStatJson::from_history(history, table)
+                        .with_system_metrics(load_avg, cores)
+                )?
+            ),
+            OutputFormat::Xml => println!(
+                "{}",
+                vnstat_rs::VnStatJson::from_history(history, table)
+                    .with_system_metrics(load_avg, cores)
+                    .to_xml()
+            ),
             OutputFormat::Oneline => {
                 for h in history {
-                    println!("h;{};{};{};{};{};", h.hostname, h.interface, h.date, h.rx, h.tx);
+                    println!(
+                        "h;{};{};{};{};{};",
+                        h.hostname, h.interface, h.date, h.rx, h.tx
+                    );
                 }
             }
             OutputFormat::Table => {
@@ -798,25 +1090,58 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    if matches!(format, OutputFormat::Oneline) {
-        let mut stats = db.get_all_interface_stats(cli.iface.as_deref(), final_host_filter, filter_type).await?;
-
+    if matches!(format, OutputFormat::Oneline)
+        || matches!(format, OutputFormat::Json)
+        || matches!(format, OutputFormat::Xml)
+    {
+        let mut stats = db
+            .get_all_interface_stats(
+                cli.iface.as_deref(),
+                final_host_filter,
+                filter_type,
+                active_only,
+            )
+            .await?;
         stats.retain(|s| s.rx_bytes + s.tx_bytes > 0);
+
+        let load_avg = vnstat_rs::get_load_average().ok();
+        let cores = Some(vnstat_rs::get_num_cores());
+
         match format {
-            OutputFormat::Json => println!("{}", serde_json::to_string(&vnstat_rs::VnStatJson::new(stats))?),
-            OutputFormat::Xml => println!("{}", vnstat_rs::VnStatJson::new(stats).to_xml()),
+            OutputFormat::Json => println!(
+                "{}",
+                serde_json::to_string(
+                    &vnstat_rs::VnStatJson::new(stats)
+                        .with_system_metrics(load_avg, cores)
+                )?
+            ),
+            OutputFormat::Xml => println!(
+                "{}",
+                vnstat_rs::VnStatJson::new(stats)
+                    .with_system_metrics(load_avg, cores)
+                    .to_xml()
+            ),
             OutputFormat::Oneline => {
                 for s in stats {
-                    println!("1;{};{};{};{};{};", s.hostname, s.name, s.rx_bytes, s.tx_bytes, s.rx_bytes + s.tx_bytes);
+                    println!(
+                        "1;{};{};{};{};{};",
+                        s.hostname,
+                        s.name,
+                        s.rx_bytes,
+                        s.tx_bytes,
+                        s.rx_bytes + s.tx_bytes
+                    );
                 }
             }
-            _ => unreachable!(),
+            _ => {}
         }
         return Ok(());
     }
 
     // Default Table view (vnstat summary)
-    let summaries = db.get_summary(cli.iface.as_deref(), final_host_filter, filter_type).await?;
+    let summaries = db
+        .get_summary(cli.iface.as_deref(), final_host_filter, filter_type, active_only)
+        .await?;
     print_summary_table(summaries, &db.machine_id);
 
     Ok(())

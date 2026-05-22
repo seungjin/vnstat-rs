@@ -1,4 +1,4 @@
-use chrono::{Datelike, Timelike, Local};
+use chrono::{Datelike, Local, Timelike};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct InterfaceStats {
@@ -19,6 +19,10 @@ pub struct InterfaceStats {
 pub struct VnStatJson {
     pub vnstatversion: String,
     pub jsonversion: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_average: Option<(f64, f64, f64)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_cores: Option<usize>,
     pub interfaces: Vec<JsonInterface>,
 }
 
@@ -122,7 +126,9 @@ pub struct HistoryEntry {
 
 impl JsonTimestamp {
     pub fn from_timestamp(ts: i64, include_time: bool) -> Self {
-        let dt = chrono::DateTime::from_timestamp(ts, 0).unwrap_or_default().with_timezone(&Local);
+        let dt = chrono::DateTime::from_timestamp(ts, 0)
+            .unwrap_or_default()
+            .with_timezone(&Local);
         Self {
             date: JsonDate {
                 year: dt.year(),
@@ -178,13 +184,19 @@ impl InterfaceStats {
 
 impl JsonDate {
     pub fn to_xml(&self) -> String {
-        format!("<date><year>{}</year><month>{:02}</month><day>{:02}</day></date>", self.year, self.month, self.day)
+        format!(
+            "<date><year>{}</year><month>{:02}</month><day>{:02}</day></date>",
+            self.year, self.month, self.day
+        )
     }
 }
 
 impl JsonTime {
     pub fn to_xml(&self) -> String {
-        format!("<time><hour>{:02}</hour><minute>{:02}</minute></time>", self.hour, self.minute)
+        format!(
+            "<time><hour>{:02}</hour><minute>{:02}</minute></time>",
+            self.hour, self.minute
+        )
     }
 }
 
@@ -194,18 +206,29 @@ impl JsonTimestamp {
         if let Some(ref t) = self.time {
             out.push_str(&t.to_xml());
         }
-        out.push_str(&format!("<timestamp>{}</timestamp></{}>", self.timestamp, tag));
+        out.push_str(&format!(
+            "<timestamp>{}</timestamp></{}>",
+            self.timestamp, tag
+        ));
         out
     }
 }
 
 impl JsonHistoryEntry {
     pub fn to_xml(&self, tag: &str) -> String {
-        let mut out = format!("<{} id=\"{}\">{}", tag, self.id.unwrap_or(0), self.date.to_xml());
+        let mut out = format!(
+            "<{} id=\"{}\">{}",
+            tag,
+            self.id.unwrap_or(0),
+            self.date.to_xml()
+        );
         if let Some(ref t) = self.time {
             out.push_str(&t.to_xml());
         }
-        out.push_str(&format!("<timestamp>{}</timestamp><rx>{}</rx><tx>{}</tx></{}>", self.timestamp, self.rx, self.tx, tag));
+        out.push_str(&format!(
+            "<timestamp>{}</timestamp><rx>{}</rx><tx>{}</tx></{}>",
+            self.timestamp, self.rx, self.tx, tag
+        ));
         out
     }
 }
@@ -213,10 +236,18 @@ impl JsonHistoryEntry {
 impl JsonTraffic {
     pub fn to_xml(&self) -> String {
         let mut out = String::from("<traffic>");
-        out.push_str(&format!("<total><rx>{}</rx><tx>{}</tx></total>", self.total.rx, self.total.tx));
-        
-        let write_entries = |entries: &[JsonHistoryEntry], plural: &str, singular: &str| -> String {
-            if entries.is_empty() { return String::new(); }
+        out.push_str(&format!(
+            "<total><rx>{}</rx><tx>{}</tx></total>",
+            self.total.rx, self.total.tx
+        ));
+
+        let write_entries = |entries: &[JsonHistoryEntry],
+                             plural: &str,
+                             singular: &str|
+         -> String {
+            if entries.is_empty() {
+                return String::new();
+            }
             let mut s = format!("<{}>", plural);
             for entry in entries {
                 s.push_str(&entry.to_xml(singular));
@@ -225,7 +256,11 @@ impl JsonTraffic {
             s
         };
 
-        out.push_str(&write_entries(&self.fiveminute, "fiveminutes", "fiveminute"));
+        out.push_str(&write_entries(
+            &self.fiveminute,
+            "fiveminutes",
+            "fiveminute",
+        ));
         out.push_str(&write_entries(&self.hour, "hours", "hour"));
         out.push_str(&write_entries(&self.day, "days", "day"));
         out.push_str(&write_entries(&self.month, "months", "month"));
@@ -258,7 +293,19 @@ impl JsonInterface {
 
 impl VnStatJson {
     pub fn to_xml(&self) -> String {
-        let mut out = format!("<vnstat version=\"{}\" xmlversion=\"2\">\n", self.vnstatversion);
+        let mut out = format!(
+            "<vnstat version=\"{}\" xmlversion=\"2\">\n",
+            self.vnstatversion
+        );
+        if let Some((one, five, fifteen)) = self.load_average {
+            out.push_str(&format!(
+                " <load_average>{:.2} {:.2} {:.2}</load_average>\n",
+                one, five, fifteen
+            ));
+        }
+        if let Some(cores) = self.num_cores {
+            out.push_str(&format!(" <num_cores>{}</num_cores>\n", cores));
+        }
         for iface in &self.interfaces {
             out.push_str(&iface.to_xml());
             out.push('\n');
@@ -266,13 +313,25 @@ impl VnStatJson {
         out.push_str("</vnstat>");
         out
     }
-    
+
     pub fn new(stats: Vec<InterfaceStats>) -> Self {
         Self {
             vnstatversion: env!("CARGO_PKG_VERSION").to_string(),
             jsonversion: "2".to_string(),
+            load_average: None,
+            num_cores: None,
             interfaces: stats.into_iter().map(|s| s.to_json()).collect(),
         }
+    }
+
+    pub fn with_system_metrics(
+        mut self,
+        load_avg: Option<(f64, f64, f64)>,
+        cores: Option<usize>,
+    ) -> Self {
+        self.load_average = load_avg;
+        self.num_cores = cores;
+        self
     }
 
     pub fn from_history(history: Vec<HistoryEntry>, table: &str) -> Self {
@@ -283,8 +342,13 @@ impl VnStatJson {
 
     pub fn insert_history(&mut self, history: Vec<HistoryEntry>, table: &str) {
         for entry in history {
-            if let Some(iface) = self.interfaces.iter_mut().find(|i| i.name == entry.interface) {
-                let json_entry = entry.to_json(table == "fiveminute" || table == "hour");
+            if let Some(iface) = self
+                .interfaces
+                .iter_mut()
+                .find(|i| i.name == entry.interface)
+            {
+                let json_entry =
+                    entry.to_json(table == "fiveminute" || table == "hour");
                 match table {
                     "fiveminute" => iface.traffic.fiveminute.push(json_entry),
                     "hour" => iface.traffic.hour.push(json_entry),
@@ -297,7 +361,8 @@ impl VnStatJson {
             } else {
                 // If interface not found in stats (unlikely but possible), create a dummy one
                 let mut traffic = JsonTraffic::default();
-                let json_entry = entry.to_json(table == "fiveminute" || table == "hour");
+                let json_entry =
+                    entry.to_json(table == "fiveminute" || table == "hour");
                 match table {
                     "fiveminute" => traffic.fiveminute.push(json_entry),
                     "hour" => traffic.hour.push(json_entry),
@@ -343,7 +408,7 @@ mod tests {
 
         let json = VnStatJson::new(stats);
         let xml = json.to_xml();
-        
+
         assert!(xml.contains("<vnstat version="));
         assert!(xml.contains("xmlversion=\"2\""));
         assert!(xml.contains("<interface name=\"eth0\">"));

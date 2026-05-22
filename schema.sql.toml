@@ -1,4 +1,4 @@
-version = 2026050515
+version = 2026050701
 
 # Full schema for fresh installs (includes all latest columns)
 sql = """
@@ -102,11 +102,38 @@ CREATE TABLE IF NOT EXISTS top (
     CONSTRAINT u UNIQUE (interface, date)
 );
 
+-- System statistics table
+CREATE TABLE IF NOT EXISTS system_stats (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id      INTEGER NOT NULL REFERENCES host(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    load_avg_1   REAL,
+    load_avg_5   REAL,
+    load_avg_15  REAL,
+    num_cores    INTEGER,
+    CONSTRAINT u_host_date UNIQUE(host_id, date)
+);
+
 -- Backwards compatibility or metadata
 CREATE TABLE IF NOT EXISTS info (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
     value TEXT NOT NULL
+);
+"""
+
+[[migrations]]
+version = 2026050701
+sql = """
+CREATE TABLE IF NOT EXISTS system_stats (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    host_id      INTEGER NOT NULL REFERENCES host(id) ON DELETE CASCADE,
+    date         INTEGER NOT NULL,
+    load_avg_1   REAL,
+    load_avg_5   REAL,
+    load_avg_15  REAL,
+    num_cores    INTEGER,
+    CONSTRAINT u_host_date UNIQUE(host_id, date)
 );
 """
 

@@ -1,20 +1,90 @@
-use anyhow::{Result};
-use std::time::{SystemTime, UNIX_EPOCH};
-use crate::models::{InterfaceStats, HistoryEntry, SummaryData, NintyFifthData};
-use crate::utils::{parse_net_dev};
 use crate::db::Db;
+use crate::models::{
+    HistoryEntry, InterfaceStats, NintyFifthData, SummaryData,
+};
+use crate::utils::parse_net_dev;
+use anyhow::Result;
+use chrono::{Datelike, Local, TimeZone, Timelike, Utc};
 use libsql::params;
-use chrono::{Datelike, Local, TimeZone, Utc, Timelike};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 impl Db {
-    pub async fn add_traffic(&self, interface_id: i64, interface_name: &str, table: &str, date: i64, rx: u64, tx: u64) -> Result<()> {
+    pub async fn add_system_stats(
+        &self,
+        date: i64,
+        load_avg: (f64, f64, f64),
+        num_cores: usize,
+    ) -> Result<()> {
+        let local_sql = "INSERT INTO system_stats (host_id, date, load_avg_1, load_avg_5, load_avg_15, num_cores) 
+                         VALUES (?, ?, ?, ?, ?, ?)
+                         ON CONFLICT(host_id, date) DO UPDATE SET 
+                            load_avg_1 = excluded.load_avg_1, 
+                            load_avg_5 = excluded.load_avg_5, 
+                            load_avg_15 = excluded.load_avg_15,
+                            num_cores = excluded.num_cores";
+        self.local_conn
+            .execute(
+                local_sql,
+                (
+                    self.host_id,
+                    date,
+                    load_avg.0,
+                    load_avg.1,
+                    load_avg.2,
+                    num_cores as i64,
+                ),
+            )
+            .await?;
+
+        if let Some(ref remote) = self.remote_conn {
+            let remote_sql = "INSERT INTO system_stats (host_id, date, load_avg_1, load_avg_5, load_avg_15, num_cores)
+                              SELECT id, ?, ?, ?, ?, ? FROM host WHERE machine_id = ?
+                              ON CONFLICT(host_id, date) DO UPDATE SET 
+                                load_avg_1 = excluded.load_avg_1, 
+                                load_avg_5 = excluded.load_avg_5, 
+                                load_avg_15 = excluded.load_avg_15,
+                                num_cores = excluded.num_cores";
+            if let Err(e) = remote
+                .execute(
+                    remote_sql,
+                    (
+                        date,
+                        load_avg.0,
+                        load_avg.1,
+                        load_avg.2,
+                        num_cores as i64,
+                        self.machine_id.clone(),
+                    ),
+                )
+                .await
+            {
+                eprintln!(
+                    "Warning: Failed to add system stats to remote: {}",
+                    e
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn add_traffic(
+        &self,
+        interface_id: i64,
+        interface_name: &str,
+        table: &str,
+        date: i64,
+        rx: u64,
+        tx: u64,
+    ) -> Result<()> {
         let local_sql = format!(
                 "INSERT INTO {} (interface, date, rx, tx) VALUES (?, ?, ?, ?)
                  ON CONFLICT(interface, date) DO UPDATE SET rx = rx + excluded.rx, tx = tx + excluded.tx",
                 table
             );
-        self.local_conn.execute(&local_sql, (interface_id, date, rx as i64, tx as i64)).await?;
-        
+        self.local_conn
+            .execute(&local_sql, (interface_id, date, rx as i64, tx as i64))
+            .await?;
+
         if let Some(ref remote) = self.remote_conn {
             let remote_sql = format!(
                 "INSERT INTO {table} (interface, date, rx, tx)
@@ -22,102 +92,196 @@ impl Db {
                  WHERE name = ? AND host_id = (SELECT id FROM host WHERE machine_id = ?)
                  ON CONFLICT(interface, date) DO UPDATE SET rx = rx + excluded.rx, tx = tx + excluded.tx"
             );
-            if let Err(e) = remote.execute(&remote_sql, (date, rx as i64, tx as i64, interface_name.to_string(), self.machine_id.clone())).await {
-                eprintln!("Warning: Failed to add traffic to remote (table {}): {}", table, e);
+            if let Err(e) = remote
+                .execute(
+                    &remote_sql,
+                    (
+                        date,
+                        rx as i64,
+                        tx as i64,
+                        interface_name.to_string(),
+                        self.machine_id.clone(),
+                    ),
+                )
+                .await
+            {
+                eprintln!(
+                    "Warning: Failed to add traffic to remote (table {}): {}",
+                    table, e
+                );
             }
         }
         Ok(())
     }
 
-    pub async fn add_history_entry(&self, id: i64, name: &str, rx_delta: u64, tx_delta: u64) -> Result<()> {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+    pub async fn add_history_entry(
+        &self,
+        id: i64,
+        name: &str,
+        rx_delta: u64,
+        tx_delta: u64,
+    ) -> Result<()> {
+        let now =
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         let dt_utc = Utc::now();
 
         let five_min = (now / 300) * 300;
-        self.add_traffic(id, name, "fiveminute", five_min, rx_delta, tx_delta).await?;
+        self.add_traffic(id, name, "fiveminute", five_min, rx_delta, tx_delta)
+            .await?;
 
         let hour = (now / 3600) * 3600;
-        self.add_traffic(id, name, "hour", hour, rx_delta, tx_delta).await?;
+        self.add_traffic(id, name, "hour", hour, rx_delta, tx_delta)
+            .await?;
 
         let day_dt = dt_utc.date_naive().and_hms_opt(0, 0, 0).unwrap();
         let day = Utc.from_local_datetime(&day_dt).unwrap().timestamp();
-        self.add_traffic(id, name, "day", day, rx_delta, tx_delta).await?;
+        self.add_traffic(id, name, "day", day, rx_delta, tx_delta)
+            .await?;
 
-        let month_dt = dt_utc.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let month_dt = dt_utc
+            .date_naive()
+            .with_day(1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
         let month = Utc.from_local_datetime(&month_dt).unwrap().timestamp();
-        self.add_traffic(id, name, "month", month, rx_delta, tx_delta).await?;
+        self.add_traffic(id, name, "month", month, rx_delta, tx_delta)
+            .await?;
 
-        let year_dt = dt_utc.date_naive().with_day(1).unwrap().with_month(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+        let year_dt = dt_utc
+            .date_naive()
+            .with_day(1)
+            .unwrap()
+            .with_month(1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
         let year = Utc.from_local_datetime(&year_dt).unwrap().timestamp();
-        self.add_traffic(id, name, "year", year, rx_delta, tx_delta).await?;
+        self.add_traffic(id, name, "year", year, rx_delta, tx_delta)
+            .await?;
 
-        self.add_traffic(id, name, "top", day, rx_delta, tx_delta).await?;
+        self.add_traffic(id, name, "top", day, rx_delta, tx_delta)
+            .await?;
         Ok(())
     }
 
-    pub async fn prune_stats(&self, config: &crate::config::Config) -> Result<()> {
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+    pub async fn prune_stats(
+        &self,
+        config: &crate::config::Config,
+    ) -> Result<()> {
+        let now =
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         let host_id = self.host_id;
 
         // 5-minute data
         let five_min_cutoff = now - (config.five_minute_hours as i64 * 3600);
         let sql5 = "DELETE FROM fiveminute WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
-        self.local_conn.execute(sql5, (five_min_cutoff, host_id)).await?;
+        self.local_conn
+            .execute(sql5, (five_min_cutoff, host_id))
+            .await?;
         if let Some(ref remote) = self.remote_conn {
             let remote_sql5 = "DELETE FROM fiveminute WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = (SELECT id FROM host WHERE machine_id = ?))";
-            if let Err(e) = remote.execute(remote_sql5, (five_min_cutoff, self.machine_id.clone())).await {
-                eprintln!("Warning: Failed to prune 5-minute data on remote: {}", e);
+            if let Err(e) = remote
+                .execute(
+                    remote_sql5,
+                    (five_min_cutoff, self.machine_id.clone()),
+                )
+                .await
+            {
+                eprintln!(
+                    "Warning: Failed to prune 5-minute data on remote: {}",
+                    e
+                );
             }
         }
 
         // Hourly data
         let hourly_cutoff = now - (config.hourly_days as i64 * 86400);
         let sqlh = "DELETE FROM hour WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
-        self.local_conn.execute(sqlh, (hourly_cutoff, host_id)).await?;
+        self.local_conn
+            .execute(sqlh, (hourly_cutoff, host_id))
+            .await?;
         if let Some(ref remote) = self.remote_conn {
             let remote_sqlh = "DELETE FROM hour WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = (SELECT id FROM host WHERE machine_id = ?))";
-            if let Err(e) = remote.execute(remote_sqlh, (hourly_cutoff, self.machine_id.clone())).await {
-                eprintln!("Warning: Failed to prune hourly data on remote: {}", e);
+            if let Err(e) = remote
+                .execute(remote_sqlh, (hourly_cutoff, self.machine_id.clone()))
+                .await
+            {
+                eprintln!(
+                    "Warning: Failed to prune hourly data on remote: {}",
+                    e
+                );
             }
         }
 
         // Daily data
         let daily_cutoff = now - (config.daily_days as i64 * 86400);
         let sqld = "DELETE FROM day WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
-        self.local_conn.execute(sqld, (daily_cutoff, host_id)).await?;
+        self.local_conn
+            .execute(sqld, (daily_cutoff, host_id))
+            .await?;
         if let Some(ref remote) = self.remote_conn {
             let remote_sqld = "DELETE FROM day WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = (SELECT id FROM host WHERE machine_id = ?))";
-            if let Err(e) = remote.execute(remote_sqld, (daily_cutoff, self.machine_id.clone())).await {
-                eprintln!("Warning: Failed to prune daily data on remote: {}", e);
+            if let Err(e) = remote
+                .execute(remote_sqld, (daily_cutoff, self.machine_id.clone()))
+                .await
+            {
+                eprintln!(
+                    "Warning: Failed to prune daily data on remote: {}",
+                    e
+                );
             }
         }
 
         // Monthly data (approximate 30 days per month for simplicity of cutoff)
         let monthly_cutoff = now - (config.monthly_months as i64 * 30 * 86400);
         let sqlm = "DELETE FROM month WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
-        self.local_conn.execute(sqlm, (monthly_cutoff, host_id)).await?;
+        self.local_conn
+            .execute(sqlm, (monthly_cutoff, host_id))
+            .await?;
         if let Some(ref remote) = self.remote_conn {
             let remote_sqlm = "DELETE FROM month WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = (SELECT id FROM host WHERE machine_id = ?))";
-            if let Err(e) = remote.execute(remote_sqlm, (monthly_cutoff, self.machine_id.clone())).await {
-                eprintln!("Warning: Failed to prune monthly data on remote: {}", e);
+            if let Err(e) = remote
+                .execute(remote_sqlm, (monthly_cutoff, self.machine_id.clone()))
+                .await
+            {
+                eprintln!(
+                    "Warning: Failed to prune monthly data on remote: {}",
+                    e
+                );
             }
         }
 
         // Yearly data
         if config.yearly_years >= 0 {
-            let yearly_cutoff = now - (config.yearly_years as i64 * 365 * 86400);
+            let yearly_cutoff =
+                now - (config.yearly_years as i64 * 365 * 86400);
             let sqly = "DELETE FROM year WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = ?)";
-            self.local_conn.execute(sqly, (yearly_cutoff, host_id)).await?;
+            self.local_conn
+                .execute(sqly, (yearly_cutoff, host_id))
+                .await?;
             if let Some(ref remote) = self.remote_conn {
                 let remote_sqly = "DELETE FROM year WHERE date < ? AND interface IN (SELECT id FROM interface WHERE host_id = (SELECT id FROM host WHERE machine_id = ?))";
-                if let Err(e) = remote.execute(remote_sqly, (yearly_cutoff, self.machine_id.clone())).await {
-                    eprintln!("Warning: Failed to prune yearly data on remote: {}", e);
+                if let Err(e) = remote
+                    .execute(
+                        remote_sqly,
+                        (yearly_cutoff, self.machine_id.clone()),
+                    )
+                    .await
+                {
+                    eprintln!(
+                        "Warning: Failed to prune yearly data on remote: {}",
+                        e
+                    );
                 }
             }
         }
 
         // Top days (keep only top N entries per interface belonging to this host)
-        let mut rows = self.local_conn.query("SELECT id FROM interface WHERE host_id = ?", [host_id]).await?;
+        let mut rows = self
+            .local_conn
+            .query("SELECT id FROM interface WHERE host_id = ?", [host_id])
+            .await?;
         let mut interfaces = Vec::new();
         while let Some(row) = rows.next().await? {
             let id: i64 = row.get(0)?;
@@ -128,10 +292,21 @@ impl Db {
             let delete_sql = "DELETE FROM top WHERE interface = ? AND date NOT IN (
                     SELECT date FROM top WHERE interface = ? ORDER BY (rx + tx) DESC LIMIT ?
                 )";
-            self.local_conn.execute(delete_sql, (iface_id, iface_id, config.top_day_entries as i64)).await?;
+            self.local_conn
+                .execute(
+                    delete_sql,
+                    (iface_id, iface_id, config.top_day_entries as i64),
+                )
+                .await?;
             if let Some(ref remote) = self.remote_conn {
                 // Get name for this iface_id to resolve on remote
-                let mut name_row = self.local_conn.query("SELECT name FROM interface WHERE id = ?", [iface_id]).await?;
+                let mut name_row = self
+                    .local_conn
+                    .query(
+                        "SELECT name FROM interface WHERE id = ?",
+                        [iface_id],
+                    )
+                    .await?;
                 if let Some(row) = name_row.next().await? {
                     let iface_name: String = row.get(0)?;
                     let remote_delete_sql = format!(
@@ -141,8 +316,23 @@ impl Db {
                             ORDER BY (rx + tx) DESC LIMIT ?
                          )"
                     );
-                    if let Err(e) = remote.execute(&remote_delete_sql, (iface_name.clone(), self.machine_id.clone(), iface_name, self.machine_id.clone(), config.top_day_entries as i64)).await {
-                        eprintln!("Warning: Failed to prune top data on remote for interface {}: {}", iface_id, e);
+                    if let Err(e) = remote
+                        .execute(
+                            &remote_delete_sql,
+                            (
+                                iface_name.clone(),
+                                self.machine_id.clone(),
+                                iface_name,
+                                self.machine_id.clone(),
+                                config.top_day_entries as i64,
+                            ),
+                        )
+                        .await
+                    {
+                        eprintln!(
+                            "Warning: Failed to prune top data on remote for interface {}: {}",
+                            iface_id, e
+                        );
                     }
                 }
             }
@@ -151,7 +341,11 @@ impl Db {
         Ok(())
     }
 
-    pub async fn update_stats(&self, filter_iface: Option<&str>, config: &crate::config::Config) -> Result<()> {
+    pub async fn update_stats(
+        &self,
+        filter_iface: Option<&str>,
+        config: &crate::config::Config,
+    ) -> Result<()> {
         // 1. Update host last_seen heartbeat using database time to avoid clock drift issues
         let _ = self.local_conn.execute("UPDATE host SET last_seen = strftime('%s','now') WHERE machine_id = ?", [self.machine_id.clone()]).await;
         if let Some(ref remote) = self.remote_conn {
@@ -170,21 +364,41 @@ impl Db {
                 }
             }
             // Log discovered interface
-            println!("Processing interface: {}", stat.name); 
+            println!("Processing interface: {}", stat.name);
 
-            if let Some((id, last_rx, last_tx, current_mac, itype, updated, created, rxtotal, txtotal)) = self.get_interface(&stat.name).await? {
+            if let Some((
+                id,
+                last_rx,
+                last_tx,
+                current_mac,
+                itype,
+                updated,
+                created,
+                rxtotal,
+                txtotal,
+            )) = self.get_interface(&stat.name).await?
+            {
                 seen_ids.insert(id);
-                
+
                 // Mark as active if it was inactive
                 let _ = self.set_interface_active(id, &stat.name, true).await;
 
-                if current_mac.is_none() || current_mac.as_ref().map(|m| m.is_empty()).unwrap_or(true) {
+                if current_mac.is_none()
+                    || current_mac
+                        .as_ref()
+                        .map(|m| m.is_empty())
+                        .unwrap_or(true)
+                {
                     if let Some(ref new_mac) = stat.mac_address {
-                        let _ = self.update_interface_mac(id, &stat.name, new_mac).await;
+                        let _ = self
+                            .update_interface_mac(id, &stat.name, new_mac)
+                            .await;
                     }
                 }
 
-                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)?
+                    .as_secs() as i64;
                 let time_diff = (now - updated).max(1) as u64;
                 let max_bytes_per_sec = (config.max_bandwidth * 1_000_000) / 8;
 
@@ -193,12 +407,20 @@ impl Db {
                         current - last
                     } else {
                         // Potential rollover
-                        let roll_32 = (u32::MAX as u64).saturating_sub(last).saturating_add(current).saturating_add(1);
-                        let roll_64 = u64::MAX.saturating_sub(last).saturating_add(current).saturating_add(1);
+                        let roll_32 = (u32::MAX as u64)
+                            .saturating_sub(last)
+                            .saturating_add(current)
+                            .saturating_add(1);
+                        let roll_64 = u64::MAX
+                            .saturating_sub(last)
+                            .saturating_add(current)
+                            .saturating_add(1);
 
                         if max_bytes_per_sec == 0 {
                             current // treat as reset if check is disabled
-                        } else if last <= u32::MAX as u64 && (roll_32 / time_diff) <= max_bytes_per_sec {
+                        } else if last <= u32::MAX as u64
+                            && (roll_32 / time_diff) <= max_bytes_per_sec
+                        {
                             roll_32
                         } else if (roll_64 / time_diff) <= max_bytes_per_sec {
                             roll_64
@@ -213,30 +435,66 @@ impl Db {
 
                 if rx_delta > 0 || tx_delta > 0 || (now - updated) >= 300 {
                     if rx_delta > 0 || tx_delta > 0 {
-                        println!("Updating interface {} (+{} RX, +{} TX)...", stat.name, rx_delta, tx_delta);
+                        println!(
+                            "Updating interface {} (+{} RX, +{} TX)...",
+                            stat.name, rx_delta, tx_delta
+                        );
                     }
-                    self.update_interface_counters(id, &stat.name, stat.rx_bytes, stat.tx_bytes, rx_delta, tx_delta, rxtotal, txtotal, created, current_mac, stat.interface_type.clone().or(itype)).await?;
+                    self.update_interface_counters(
+                        id,
+                        &stat.name,
+                        stat.rx_bytes,
+                        stat.tx_bytes,
+                        rx_delta,
+                        tx_delta,
+                        rxtotal,
+                        txtotal,
+                        created,
+                        current_mac,
+                        stat.interface_type.clone().or(itype),
+                    )
+                    .await?;
                     if rx_delta > 0 || tx_delta > 0 {
-                        self.add_history_entry(id, &stat.name, rx_delta, tx_delta).await?;
+                        self.add_history_entry(
+                            id, &stat.name, rx_delta, tx_delta,
+                        )
+                        .await?;
                     }
                 }
             } else {
-                let id = self.create_interface(&stat.name, stat.rx_bytes, stat.tx_bytes, stat.mac_address, stat.interface_type).await?;
+                let id = self
+                    .create_interface(
+                        &stat.name,
+                        stat.rx_bytes,
+                        stat.tx_bytes,
+                        stat.mac_address,
+                        stat.interface_type,
+                    )
+                    .await?;
                 seen_ids.insert(id);
                 self.add_history_entry(id, &stat.name, 0, 0).await?;
-                println!("New interface found and registered: {} (host: {})", stat.name, self.hostname);
+                println!(
+                    "New interface found and registered: {} (host: {})",
+                    stat.name, self.hostname
+                );
             }
         }
 
         // If not filtering, mark interfaces not seen in this pass as inactive
         if filter_iface.is_none() {
-            let all_ifaces = self.get_all_interface_stats(None, Some(&self.machine_id), None).await?;
+            let all_ifaces = self
+                .get_all_interface_stats(None, Some(&self.machine_id), None, false)
+                .await?;
             for iface_stat in all_ifaces {
-                // We need the internal ID to mark inactive. 
+                // We need the internal ID to mark inactive.
                 // Since get_all_interface_stats doesn't return ID, we'll use a new helper or get_interface
-                if let Some((id, _, _, _, _, _, _, _, _)) = self.get_interface(&iface_stat.name).await? {
+                if let Some((id, _, _, _, _, _, _, _, _)) =
+                    self.get_interface(&iface_stat.name).await?
+                {
                     if !seen_ids.contains(&id) {
-                        let _ = self.set_interface_active(id, &iface_stat.name, false).await;
+                        let _ = self
+                            .set_interface_active(id, &iface_stat.name, false)
+                            .await;
                     }
                 }
             }
@@ -245,12 +503,19 @@ impl Db {
         Ok(())
     }
 
-    pub async fn get_all_interface_stats(&self, filter_iface: Option<&str>, filter_host: Option<&str>, filter_type: Option<u8>) -> Result<Vec<InterfaceStats>> {
-        let conn = if filter_host.is_none() || filter_host != Some(&self.machine_id) {
-             self.remote_conn.as_ref().unwrap_or(&self.local_conn)
-        } else {
-             &self.local_conn
-        };
+    pub async fn get_all_interface_stats(
+        &self,
+        filter_iface: Option<&str>,
+        filter_host: Option<&str>,
+        filter_type: Option<u8>,
+        active_only: bool,
+    ) -> Result<Vec<InterfaceStats>> {
+        let conn =
+            if filter_host.is_none() || filter_host != Some(&self.machine_id) {
+                self.remote_conn.as_ref().unwrap_or(&self.local_conn)
+            } else {
+                &self.local_conn
+            };
 
         let mut ifaces_query = "SELECT i.id, i.name, i.alias, i.mac_address, i.rxtotal, i.txtotal, h.hostname, i.created, i.updated, h.machine_id, i.interface_type
                           FROM interface i
@@ -261,11 +526,22 @@ impl Db {
         }
 
         if let Some(host) = filter_host {
-            ifaces_query.push_str(&format!(" AND (h.hostname = '{}' OR h.machine_id = '{}') ", host, host));
+            ifaces_query.push_str(&format!(
+                " AND (h.hostname = '{}' OR h.machine_id = '{}') ",
+                host, host
+            ));
         }
 
         if let Some(t) = filter_type {
-            ifaces_query.push_str(&format!(" AND i.interface_type = {} ", t));
+            match t {
+                254 => ifaces_query.push_str(" AND i.interface_type < 100"),
+                255 => ifaces_query.push_str(" AND i.interface_type >= 100"),
+                _ => ifaces_query.push_str(&format!(" AND i.interface_type = {}", t)),
+            }
+        }
+
+        if active_only {
+            ifaces_query.push_str(" AND i.active = 1 ");
         }
 
         let mut rows = conn.query(&ifaces_query, params![]).await?;
@@ -279,7 +555,8 @@ impl Db {
             let hostname: String = row.get(6)?;
             let created: i64 = row.get(7)?;
             let updated: i64 = row.get(8)?;
-            let itype: Option<u8> = row.get::<Option<i64>>(10)?.map(|v| v as u8);
+            let itype: Option<u8> =
+                row.get::<Option<i64>>(10)?.map(|v| v as u8);
 
             stats.push(InterfaceStats {
                 name,
@@ -297,12 +574,23 @@ impl Db {
         }
         Ok(stats)
     }
-    pub async fn get_history(&self, table: &str, filter_iface: Option<&str>, filter_host: Option<&str>, filter_type: Option<u8>, limit: usize, begin: Option<i64>, end: Option<i64>) -> Result<Vec<HistoryEntry>> {
-        let conn = if filter_host.is_none() || filter_host != Some(&self.machine_id) {
-            self.remote_conn.as_ref().unwrap_or(&self.local_conn)
-        } else {
-            &self.local_conn
-        };
+    pub async fn get_history(
+        &self,
+        table: &str,
+        filter_iface: Option<&str>,
+        filter_host: Option<&str>,
+        filter_type: Option<u8>,
+        active_only: bool,
+        limit: usize,
+        begin: Option<i64>,
+        end: Option<i64>,
+    ) -> Result<Vec<HistoryEntry>> {
+        let conn =
+            if filter_host.is_none() || filter_host != Some(&self.machine_id) {
+                self.remote_conn.as_ref().unwrap_or(&self.local_conn)
+            } else {
+                &self.local_conn
+            };
 
         let mut ifaces_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE 1=1".to_string();
 
@@ -311,17 +599,33 @@ impl Db {
         }
 
         if let Some(host) = filter_host {
-            ifaces_query.push_str(&format!(" AND (h.hostname = '{}' OR h.machine_id = '{}')", host, host));
+            ifaces_query.push_str(&format!(
+                " AND (h.hostname = '{}' OR h.machine_id = '{}')",
+                host, host
+            ));
         }
 
         if let Some(t) = filter_type {
-            ifaces_query.push_str(&format!(" AND i.interface_type = {}", t));
+            match t {
+                254 => ifaces_query.push_str(" AND i.interface_type < 100"),
+                255 => ifaces_query.push_str(" AND i.interface_type >= 100"),
+                _ => ifaces_query.push_str(&format!(" AND i.interface_type = {}", t)),
+            }
+        }
+
+        if active_only {
+            ifaces_query.push_str(" AND i.active = 1");
         }
 
         let mut iface_rows = conn.query(&ifaces_query, params![]).await?;
         let mut interfaces = Vec::new();
         while let Some(row) = iface_rows.next().await? {
-            interfaces.push((row.get::<i64>(0)?, row.get::<String>(1)?, row.get::<String>(2)?, row.get::<String>(3)?));
+            interfaces.push((
+                row.get::<i64>(0)?,
+                row.get::<String>(1)?,
+                row.get::<String>(2)?,
+                row.get::<String>(3)?,
+            ));
         }
 
         let mut history = Vec::new();
@@ -331,13 +635,16 @@ impl Db {
             // Determine if we can aggregate from a smaller unit for better local accuracy
             let (source_table, group_by_table) = match table {
                 "hour" => ("fiveminute", true),
-                "day" => ("hour", true),
-                "month" => ("day", true),
-                "year" => ("day", true),
+                "day" => ("day", false),
+                "month" => ("month", false),
+                "year" => ("year", false),
                 _ => (table, false), // No aggregation for fiveminute or top
             };
 
-            let mut query_str = format!("SELECT rx, tx, date FROM {} WHERE interface = ? ", source_table);
+            let mut query_str = format!(
+                "SELECT rx, tx, date FROM {} WHERE interface = ? ",
+                source_table
+            );
             if let Some(b) = begin {
                 query_str.push_str(&format!("AND date >= {} ", b));
             }
@@ -346,59 +653,92 @@ impl Db {
             }
 
             if group_by_table {
-                 // Fetch a reasonable amount of data to satisfy the limit after grouping
-                 let fetch_limit = match table {
-                     "hour" => limit * 12, // 12 * 5min = 1 hour
-                     "day" => limit * 24,  // 24 * 1 hour = 1 day
-                     "month" => limit * 31,
-                     "year" => limit * 366,
-                     _ => limit,
-                 };
-                 query_str.push_str(&format!("ORDER BY date DESC LIMIT {}", fetch_limit));
+                // Fetch a reasonable amount of data to satisfy the limit after grouping
+                let fetch_limit = match table {
+                    "hour" => limit * 12, // 12 * 5min = 1 hour
+                    "day" => limit * 24,  // 24 * 1 hour = 1 day
+                    "month" => limit * 31,
+                    "year" => limit * 366,
+                    _ => limit,
+                };
+                query_str.push_str(&format!(
+                    "ORDER BY date DESC LIMIT {}",
+                    fetch_limit
+                ));
             } else if table == "top" {
-                query_str.push_str(&format!("ORDER BY (rx + tx) DESC LIMIT {}", limit));
+                query_str.push_str(&format!(
+                    "ORDER BY (rx + tx) DESC LIMIT {}",
+                    limit
+                ));
             } else {
-                query_str.push_str(&format!("ORDER BY date DESC LIMIT {}", limit));
+                query_str
+                    .push_str(&format!("ORDER BY date DESC LIMIT {}", limit));
             }
 
             let mut data_rows = active_conn.query(&query_str, [id]).await?;
             let mut has_data = false;
 
             if group_by_table {
-                let mut aggregated: std::collections::BTreeMap<i64, (u64, u64)> = std::collections::BTreeMap::new();
+                let mut aggregated: std::collections::BTreeMap<
+                    i64,
+                    (u64, u64),
+                > = std::collections::BTreeMap::new();
                 while let Some(row) = data_rows.next().await? {
                     has_data = true;
                     let rx: i64 = row.get(0)?;
                     let tx: i64 = row.get(1)?;
                     let date_utc: i64 = row.get(2)?;
-                    
-                    let dt_local = Local.from_utc_datetime(&chrono::DateTime::from_timestamp(date_utc, 0).unwrap().naive_utc());
+
+                    let dt_local = Local.from_utc_datetime(
+                        &chrono::DateTime::from_timestamp(date_utc, 0)
+                            .unwrap()
+                            .naive_utc(),
+                    );
                     let bucket_ts = match table {
                         "hour" => {
-                            let dt = dt_local.date_naive().and_hms_opt(dt_local.hour(), 0, 0).unwrap();
+                            let dt = dt_local
+                                .date_naive()
+                                .and_hms_opt(dt_local.hour(), 0, 0)
+                                .unwrap();
                             Local.from_local_datetime(&dt).unwrap().timestamp()
-                        },
+                        }
                         "day" => {
-                            let dt = dt_local.date_naive().and_hms_opt(0, 0, 0).unwrap();
+                            let dt = dt_local
+                                .date_naive()
+                                .and_hms_opt(0, 0, 0)
+                                .unwrap();
                             Local.from_local_datetime(&dt).unwrap().timestamp()
-                        },
+                        }
                         "month" => {
-                            let dt = dt_local.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+                            let dt = dt_local
+                                .date_naive()
+                                .with_day(1)
+                                .unwrap()
+                                .and_hms_opt(0, 0, 0)
+                                .unwrap();
                             Local.from_local_datetime(&dt).unwrap().timestamp()
-                        },
+                        }
                         "year" => {
-                            let dt = dt_local.date_naive().with_day(1).unwrap().with_month(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
+                            let dt = dt_local
+                                .date_naive()
+                                .with_day(1)
+                                .unwrap()
+                                .with_month(1)
+                                .unwrap()
+                                .and_hms_opt(0, 0, 0)
+                                .unwrap();
                             Local.from_local_datetime(&dt).unwrap().timestamp()
-                        },
+                        }
                         _ => date_utc,
                     };
-                    
+
                     let entry = aggregated.entry(bucket_ts).or_insert((0, 0));
                     entry.0 += rx as u64;
                     entry.1 += tx as u64;
                 }
-                
-                for (date, (rx, tx)) in aggregated.into_iter().rev().take(limit) {
+
+                for (date, (rx, tx)) in aggregated.into_iter().rev().take(limit)
+                {
                     history.push(HistoryEntry {
                         hostname: hostname.clone(),
                         interface: name.clone(),
@@ -445,13 +785,20 @@ impl Db {
         Ok(history)
     }
 
-    pub async fn get_summary(&self, filter_iface: Option<&str>, filter_host: Option<&str>, filter_type: Option<u8>) -> Result<Vec<SummaryData>> {
+    pub async fn get_summary(
+        &self,
+        filter_iface: Option<&str>,
+        filter_host: Option<&str>,
+        filter_type: Option<u8>,
+        active_only: bool,
+    ) -> Result<Vec<SummaryData>> {
         // For all-hosts, we must query remote to get other hosts
-        let conn = if filter_host.is_none() || filter_host != Some(&self.machine_id) {
-             self.remote_conn.as_ref().unwrap_or(&self.local_conn)
-        } else {
-             &self.local_conn
-        };
+        let conn =
+            if filter_host.is_none() || filter_host != Some(&self.machine_id) {
+                self.remote_conn.as_ref().unwrap_or(&self.local_conn)
+            } else {
+                &self.local_conn
+            };
         let mut ifaces_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE 1=1".to_string();
 
         if let Some(iface) = filter_iface {
@@ -459,11 +806,22 @@ impl Db {
         }
 
         if let Some(host) = filter_host {
-            ifaces_query.push_str(&format!(" AND (h.hostname = '{}' OR h.machine_id = '{}')", host, host));
+            ifaces_query.push_str(&format!(
+                " AND (h.hostname = '{}' OR h.machine_id = '{}')",
+                host, host
+            ));
         }
 
         if let Some(t) = filter_type {
-            ifaces_query.push_str(&format!(" AND i.interface_type = {}", t));
+            match t {
+                254 => ifaces_query.push_str(" AND i.interface_type < 100"),
+                255 => ifaces_query.push_str(" AND i.interface_type >= 100"),
+                _ => ifaces_query.push_str(&format!(" AND i.interface_type = {}", t)),
+            }
+        }
+
+        if active_only {
+            ifaces_query.push_str(" AND i.active = 1");
         }
 
         ifaces_query.push_str(" ORDER BY h.hostname, i.name");
@@ -471,26 +829,58 @@ impl Db {
         let mut iface_rows = conn.query(&ifaces_query, params![]).await?;
         let mut interfaces = Vec::new();
         while let Some(row) = iface_rows.next().await? {
-            interfaces.push((row.get::<i64>(0)?, row.get::<String>(1)?, row.get::<String>(2)?, row.get::<String>(3)?));
+            interfaces.push((
+                row.get::<i64>(0)?,
+                row.get::<String>(1)?,
+                row.get::<String>(2)?,
+                row.get::<String>(3)?,
+            ));
         }
 
         let now_local = Local::now();
         let today_start = now_local.date_naive().and_hms_opt(0, 0, 0).unwrap();
-        let today_ts_local = Local.from_local_datetime(&today_start).unwrap().timestamp();
-        
+        let today_ts_local =
+            Local.from_local_datetime(&today_start).unwrap().timestamp();
+
         let yesterday_date = now_local.date_naive().pred_opt().unwrap();
         let yesterday_start = yesterday_date.and_hms_opt(0, 0, 0).unwrap();
-        let yesterday_ts_local = Local.from_local_datetime(&yesterday_start).unwrap().timestamp();
+        let yesterday_ts_local = Local
+            .from_local_datetime(&yesterday_start)
+            .unwrap()
+            .timestamp();
 
-        let this_month_start = now_local.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-        let this_month_ts_local = Local.from_local_datetime(&this_month_start).unwrap().timestamp();
+        let this_month_start = now_local
+            .date_naive()
+            .with_day(1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let this_month_ts_local = Local
+            .from_local_datetime(&this_month_start)
+            .unwrap()
+            .timestamp();
 
         let last_month_date = if now_local.month() == 1 {
-            now_local.date_naive().with_year(now_local.year() - 1).unwrap().with_month(12).unwrap().with_day(1).unwrap()
+            now_local
+                .date_naive()
+                .with_year(now_local.year() - 1)
+                .unwrap()
+                .with_month(12)
+                .unwrap()
+                .with_day(1)
+                .unwrap()
         } else {
-            now_local.date_naive().with_month(now_local.month() - 1).unwrap().with_day(1).unwrap()
+            now_local
+                .date_naive()
+                .with_month(now_local.month() - 1)
+                .unwrap()
+                .with_day(1)
+                .unwrap()
         };
-        let last_month_ts_local = Local.from_local_datetime(&last_month_date.and_hms_opt(0, 0, 0).unwrap()).unwrap().timestamp();
+        let last_month_ts_local = Local
+            .from_local_datetime(&last_month_date.and_hms_opt(0, 0, 0).unwrap())
+            .unwrap()
+            .timestamp();
 
         let mut summaries = Vec::new();
 
@@ -499,47 +889,75 @@ impl Db {
 
             // To show accurate Local Analysis for UTC data, we need to query fine-grained buckets
             // and sum them according to local boundaries.
-            
+
             // 1. Get Today/Yesterday stats from 'hour' table (UTC) and sum for Local Today/Yesterday
             let mut h_rows = active_conn.query("SELECT date, rx, tx FROM hour WHERE interface = ? AND date >= ?", (id, yesterday_ts_local - 3600)).await?;
-            let mut today_rx = 0; let mut today_tx = 0;
-            let mut yest_rx = 0; let mut yest_tx = 0;
-            
+            let mut today_rx = 0;
+            let mut today_tx = 0;
+            let mut yest_rx = 0;
+            let mut yest_tx = 0;
+
             while let Some(row) = h_rows.next().await? {
                 let date_utc: i64 = row.get(0)?;
                 let rx: i64 = row.get(1)?;
                 let tx: i64 = row.get(2)?;
-                
+
                 // Convert UTC bucket to Local to see where it falls
-                let dt_local = Local.from_utc_datetime(&chrono::DateTime::from_timestamp(date_utc, 0).unwrap().naive_utc());
-                let local_start_of_day = dt_local.date_naive().and_hms_opt(0, 0, 0).unwrap();
-                let local_day_ts = Local.from_local_datetime(&local_start_of_day).unwrap().timestamp();
-                
+                let dt_local = Local.from_utc_datetime(
+                    &chrono::DateTime::from_timestamp(date_utc, 0)
+                        .unwrap()
+                        .naive_utc(),
+                );
+                let local_start_of_day =
+                    dt_local.date_naive().and_hms_opt(0, 0, 0).unwrap();
+                let local_day_ts = Local
+                    .from_local_datetime(&local_start_of_day)
+                    .unwrap()
+                    .timestamp();
+
                 if local_day_ts == today_ts_local {
-                    today_rx += rx as u64; today_tx += tx as u64;
+                    today_rx += rx as u64;
+                    today_tx += tx as u64;
                 } else if local_day_ts == yesterday_ts_local {
-                    yest_rx += rx as u64; yest_tx += tx as u64;
+                    yest_rx += rx as u64;
+                    yest_tx += tx as u64;
                 }
             }
-            
+
             // 2. Get This Month / Last Month stats from 'day' table (UTC) and sum for Local Month
             let mut d_rows = active_conn.query("SELECT date, rx, tx FROM day WHERE interface = ? AND date >= ?", (id, last_month_ts_local - 86400)).await?;
-            let mut this_m_rx = 0; let mut this_m_tx = 0;
-            let mut last_m_rx = 0; let mut last_m_tx = 0;
-            
+            let mut this_m_rx = 0;
+            let mut this_m_tx = 0;
+            let mut last_m_rx = 0;
+            let mut last_m_tx = 0;
+
             while let Some(row) = d_rows.next().await? {
                 let date_utc: i64 = row.get(0)?;
                 let rx: i64 = row.get(1)?;
                 let tx: i64 = row.get(2)?;
-                
-                let dt_local = Local.from_utc_datetime(&chrono::DateTime::from_timestamp(date_utc, 0).unwrap().naive_utc());
-                let local_start_of_month = dt_local.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-                let local_month_ts = Local.from_local_datetime(&local_start_of_month).unwrap().timestamp();
-                
+
+                let dt_local = Local.from_utc_datetime(
+                    &chrono::DateTime::from_timestamp(date_utc, 0)
+                        .unwrap()
+                        .naive_utc(),
+                );
+                let local_start_of_month = dt_local
+                    .date_naive()
+                    .with_day(1)
+                    .unwrap()
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap();
+                let local_month_ts = Local
+                    .from_local_datetime(&local_start_of_month)
+                    .unwrap()
+                    .timestamp();
+
                 if local_month_ts == this_month_ts_local {
-                    this_m_rx += rx as u64; this_m_tx += tx as u64;
+                    this_m_rx += rx as u64;
+                    this_m_tx += tx as u64;
                 } else if local_month_ts == last_month_ts_local {
-                    last_m_rx += rx as u64; last_m_tx += tx as u64;
+                    last_m_rx += rx as u64;
+                    last_m_tx += tx as u64;
                 }
             }
 
@@ -555,12 +973,19 @@ impl Db {
         Ok(summaries)
     }
 
-    pub async fn get_95th_data(&self, filter_iface: Option<&str>, filter_host: Option<&str>, filter_type: Option<u8>) -> Result<NintyFifthData> {
-        let conn = if filter_host.is_none() || filter_host != Some(&self.machine_id) {
-             self.remote_conn.as_ref().unwrap_or(&self.local_conn)
-        } else {
-             &self.local_conn
-        };
+    pub async fn get_95th_data(
+        &self,
+        filter_iface: Option<&str>,
+        filter_host: Option<&str>,
+        filter_type: Option<u8>,
+        active_only: bool,
+    ) -> Result<NintyFifthData> {
+        let conn =
+            if filter_host.is_none() || filter_host != Some(&self.machine_id) {
+                self.remote_conn.as_ref().unwrap_or(&self.local_conn)
+            } else {
+                &self.local_conn
+            };
 
         // Find the specific interface, prioritizing active ones with traffic
         let mut iface_query = "SELECT i.id, i.name, h.hostname, h.machine_id FROM interface i JOIN host h ON i.host_id = h.id WHERE 1=1 ".to_string();
@@ -568,27 +993,52 @@ impl Db {
             iface_query.push_str(&format!(" AND i.name = '{}'", iface));
         }
         if let Some(host) = filter_host {
-            iface_query.push_str(&format!(" AND (h.hostname = '{}' OR h.machine_id = '{}')", host, host));
+            iface_query.push_str(&format!(
+                " AND (h.hostname = '{}' OR h.machine_id = '{}')",
+                host, host
+            ));
         }
         if let Some(t) = filter_type {
-            iface_query.push_str(&format!(" AND i.interface_type = {}", t));
+            match t {
+                254 => iface_query.push_str(" AND i.interface_type < 100"),
+                255 => iface_query.push_str(" AND i.interface_type >= 100"),
+                _ => iface_query.push_str(&format!(" AND i.interface_type = {}", t)),
+            }
         }
-        
+
+        if active_only {
+            iface_query.push_str(" AND i.active = 1");
+        }
+
         // Prioritize active interfaces with the most total traffic
-        iface_query.push_str(" ORDER BY i.active DESC, (i.rxtotal + i.txtotal) DESC LIMIT 1");
+        iface_query.push_str(
+            " ORDER BY i.active DESC, (i.rxtotal + i.txtotal) DESC LIMIT 1",
+        );
 
         let mut rows = conn.query(&iface_query, params![]).await?;
-        let (iface_id, name, hostname, _mid) = if let Some(row) = rows.next().await? {
-            (row.get::<i64>(0)?, row.get::<String>(1)?, row.get::<String>(2)?, row.get::<String>(3)?)
-        } else {
-            return Err(anyhow::anyhow!("Interface not found"));
-        };
+        let (iface_id, name, hostname, _mid) =
+            if let Some(row) = rows.next().await? {
+                (
+                    row.get::<i64>(0)?,
+                    row.get::<String>(1)?,
+                    row.get::<String>(2)?,
+                    row.get::<String>(3)?,
+                )
+            } else {
+                return Err(anyhow::anyhow!("Interface not found"));
+            };
 
         let active_conn = conn;
 
         let now_local = Local::now();
-        let month_start = now_local.date_naive().with_day(1).unwrap().and_hms_opt(0, 0, 0).unwrap();
-        let begin = Local.from_local_datetime(&month_start).unwrap().timestamp();
+        let month_start = now_local
+            .date_naive()
+            .with_day(1)
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let begin =
+            Local.from_local_datetime(&month_start).unwrap().timestamp();
         let end = now_local.timestamp();
 
         let mut data_rows = active_conn.query(
@@ -627,27 +1077,33 @@ impl Db {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use crate::config::Config;
+    use std::path::PathBuf;
 
     #[tokio::test]
     async fn test_prune_stats_host_isolation() -> Result<()> {
         let db_path = PathBuf::from("test_prune.db");
-        if db_path.exists() { let _ = std::fs::remove_file(&db_path); }
+        if db_path.exists() {
+            let _ = std::fs::remove_file(&db_path);
+        }
 
-        let db = Db::open(db_path.clone(), None, None, Some("host-a".to_string())).await?;
-        
+        let db =
+            Db::open(db_path.clone(), None, None, Some("host-a".to_string()))
+                .await?;
+
         // Create another host manually
         let host_b_machine_id = "host-b-machine-id".to_string();
-        db.local_conn.execute(
-            "INSERT INTO host (machine_id, hostname) VALUES (?, ?)",
-            (host_b_machine_id.clone(), "host-b")
-        ).await?;
+        db.local_conn
+            .execute(
+                "INSERT INTO host (machine_id, hostname) VALUES (?, ?)",
+                (host_b_machine_id.clone(), "host-b"),
+            )
+            .await?;
         let host_b_id = db.local_conn.last_insert_rowid();
 
         // Create interfaces
         let iface_a = db.create_interface("eth0", 0, 0, None, Some(0)).await?;
-        
+
         // Manually create interface for host B
         db.local_conn.execute(
             "INSERT INTO interface (host_id, name, created, updated, interface_type) VALUES (?, ?, ?, ?, ?)",
@@ -655,12 +1111,15 @@ mod tests {
         ).await?;
         let iface_b = db.local_conn.last_insert_rowid();
 
-        let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let now =
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         let old_date = now - (100 * 3600); // 100 hours ago
 
         // Add traffic for both
-        db.add_traffic(iface_a, "eth0", "fiveminute", old_date, 100, 100).await?;
-        db.add_traffic(iface_b, "eth0", "fiveminute", old_date, 200, 200).await?;
+        db.add_traffic(iface_a, "eth0", "fiveminute", old_date, 100, 100)
+            .await?;
+        db.add_traffic(iface_b, "eth0", "fiveminute", old_date, 200, 200)
+            .await?;
 
         // Configure retention: 5MinuteHours = 48
         let mut config = Config::default();
@@ -670,16 +1129,30 @@ mod tests {
         db.prune_stats(&config).await?;
 
         // Check if Host A's data is gone
-        let mut rows_a = db.local_conn.query("SELECT count(*) FROM fiveminute WHERE interface = ?", [iface_a]).await?;
+        let mut rows_a = db
+            .local_conn
+            .query(
+                "SELECT count(*) FROM fiveminute WHERE interface = ?",
+                [iface_a],
+            )
+            .await?;
         let count_a: i64 = rows_a.next().await?.unwrap().get(0)?;
         assert_eq!(count_a, 0);
 
         // Check if Host B's data is still there
-        let mut rows_b = db.local_conn.query("SELECT count(*) FROM fiveminute WHERE interface = ?", [iface_b]).await?;
+        let mut rows_b = db
+            .local_conn
+            .query(
+                "SELECT count(*) FROM fiveminute WHERE interface = ?",
+                [iface_b],
+            )
+            .await?;
         let count_b: i64 = rows_b.next().await?.unwrap().get(0)?;
         assert_eq!(count_b, 1);
 
-        if db_path.exists() { let _ = std::fs::remove_file(&db_path); }
+        if db_path.exists() {
+            let _ = std::fs::remove_file(&db_path);
+        }
         Ok(())
     }
 
@@ -693,12 +1166,20 @@ mod tests {
             if current >= last {
                 current - last
             } else {
-                let roll_32 = (u32::MAX as u64).saturating_sub(last).saturating_add(current).saturating_add(1);
-                let roll_64 = u64::MAX.saturating_sub(last).saturating_add(current).saturating_add(1);
+                let roll_32 = (u32::MAX as u64)
+                    .saturating_sub(last)
+                    .saturating_add(current)
+                    .saturating_add(1);
+                let roll_64 = u64::MAX
+                    .saturating_sub(last)
+                    .saturating_add(current)
+                    .saturating_add(1);
 
                 if max_bytes_per_sec == 0 {
                     current
-                } else if last <= u32::MAX as u64 && (roll_32 / time_diff) <= max_bytes_per_sec {
+                } else if last <= u32::MAX as u64
+                    && (roll_32 / time_diff) <= max_bytes_per_sec
+                {
                     roll_32
                 } else if (roll_64 / time_diff) <= max_bytes_per_sec {
                     roll_64
@@ -718,7 +1199,7 @@ mod tests {
         assert_eq!(calculate_delta(200, last_32), 700);
 
         // 32-bit "rollover" that is actually a reboot (exceeds bandwidth)
-        // last = 2^32 - 499, current = 2GB. 
+        // last = 2^32 - 499, current = 2GB.
         // Delta would be ~2GB + 500. 2GB / 10s = 200MB/s > 125MB/s.
         // Should treat as reset (delta = 2GB).
         let current_large = 2_000_000_000;
@@ -729,4 +1210,3 @@ mod tests {
         assert_eq!(calculate_delta(200, last_64), 700);
     }
 }
-
