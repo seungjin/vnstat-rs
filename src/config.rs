@@ -18,6 +18,7 @@ pub struct Config {
     pub daemon_socket: Option<PathBuf>,
     pub hostname_override: Option<String>,
     pub max_bandwidth: u64,
+    pub boot_variation: u64,
 }
 
 pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
@@ -32,6 +33,7 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
         yearly_years: -1,
         top_day_entries: 20,
         max_bandwidth: 1000,
+        boot_variation: 15,
         ..Default::default()
     };
 
@@ -111,6 +113,11 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
                     config.max_bandwidth = v;
                 }
             }
+            "BootVariation" => {
+                if let Ok(v) = value.parse() {
+                    config.boot_variation = v;
+                }
+            }
             "DaemonSocket" => config.daemon_socket = Some(expand_tilde(value)),
             "Hostname" => config.hostname_override = Some(value.to_string()),
             _ => {}
@@ -162,6 +169,7 @@ pub fn get_default_config(is_root: bool) -> Config {
         yearly_years: -1,
         top_day_entries: 20,
         max_bandwidth: 1000,
+        boot_variation: 15,
         ..Default::default()
     };
 

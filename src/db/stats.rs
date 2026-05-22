@@ -354,6 +354,28 @@ impl Db {
             }
         }
 
+        let mut host_rows = self.local_conn.query(
+            "SELECT started FROM host WHERE machine_id = ?",
+            [self.machine_id.clone()]
+        ).await?;
+        let db_boot_time: i64 = if let Some(row) = host_rows.next().await? {
+            row.get(0)?
+        } else {
+            0
+        };
+
+        let now_ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        let current_uptime = crate::utils::get_uptime().unwrap_or(0) as i64;
+        let current_boot_time = now_ts - current_uptime;
+        
+        let rebooted = db_boot_time > 0 && (current_boot_time - db_boot_time).abs() > config.boot_variation as i64;
+        
+        if rebooted {
+             println!("Reboot detected (boot time changed from {} to {}). Treating counter decreases as resets.", db_boot_time, current_boot_time);
+             // Update the boot time in DB
+             let _ = self.get_or_create_host().await;
+        }
+
         let stats = parse_net_dev()?;
         let mut seen_ids = std::collections::HashSet::new();
 
@@ -405,6 +427,8 @@ impl Db {
                 let calculate_delta = |current: u64, last: u64| -> u64 {
                     if current >= last {
                         current - last
+                    } else if rebooted {
+                        current // treat as reset
                     } else {
                         // Potential rollover
                         let roll_32 = (u32::MAX as u64)

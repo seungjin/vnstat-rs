@@ -555,8 +555,12 @@ async fn main() -> Result<()> {
     let user_config =
         PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
 
-    let filter_type: Option<u8> =
-        if cli.only_physical { Some(254) } else { None };
+    let active_only = !cli.all_interfaces;
+    let filter_type: Option<u8> = if cli.only_physical || (cli.iface.is_none() && !cli.all_interfaces) {
+        Some(254) // Default to physical unless all interfaces or specific interface requested
+    } else {
+        None
+    };
 
     let file_config = if let Some(ref path) = cli.config {
         let expanded_path = vnstat_rs::expand_tilde(path);
@@ -617,8 +621,6 @@ async fn main() -> Result<()> {
     } else {
         cli.host.clone().or_else(|| current_machine_id.clone())
     };
-
-    let active_only = !cli.all_interfaces;
 
     // Try to talk to daemon first
     if let Some(ref socket_path) = file_config.daemon_socket {
@@ -691,6 +693,10 @@ async fn main() -> Result<()> {
                     limit,
                     begin,
                     end,
+                })
+            } else if cli.update {
+                Some(IpcRequest::Update {
+                    interface: cli.iface.clone(),
                 })
             } else if !cli.update && !cli.init && !cli.iflist {
                 if matches!(format, OutputFormat::Table) {
@@ -845,6 +851,9 @@ async fn main() -> Result<()> {
 
                     Ok(IpcResponse::Hosts(hosts)) => {
                         print_hosts_table(hosts);
+                        return Ok(());
+                    }
+                    Ok(IpcResponse::Ok) => {
                         return Ok(());
                     }
                     Ok(IpcResponse::Error(e)) => {

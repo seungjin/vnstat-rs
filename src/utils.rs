@@ -165,3 +165,13 @@ pub fn get_load_average() -> Result<(f64, f64, f64)> {
 pub fn get_num_cores() -> usize {
     unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as usize }
 }
+
+pub fn get_uptime() -> Result<u64> {
+    let content = fs::read_to_string("/proc/uptime")?;
+    let parts: Vec<&str> = content.split_whitespace().collect();
+    if parts.is_empty() {
+        return Err(anyhow::anyhow!("Invalid /proc/uptime format"));
+    }
+    let uptime = parts[0].parse::<f64>()?;
+    Ok(uptime as u64)
+}

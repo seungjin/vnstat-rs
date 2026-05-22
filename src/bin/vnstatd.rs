@@ -365,6 +365,21 @@ async fn main() -> Result<()> {
                                             ),
                                         }
                                     }
+                                    Ok(IpcRequest::Update { interface }) => {
+                                        let config = vnstat_rs::load_best_config();
+                                        match db
+                                            .update_stats(
+                                                interface.as_deref(),
+                                                &config,
+                                            )
+                                            .await
+                                        {
+                                            Ok(_) => IpcResponse::Ok,
+                                            Err(e) => IpcResponse::Error(
+                                                e.to_string(),
+                                            ),
+                                        }
+                                    }
                                     Err(e) => IpcResponse::Error(e.to_string()),
                                 };
                                 let resp_json =

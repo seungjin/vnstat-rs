@@ -9,6 +9,8 @@ impl Db {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
+        let uptime = crate::utils::get_uptime().unwrap_or(0);
+        let boot_time = now - uptime as i64;
 
         let insert_sql = "INSERT OR IGNORE INTO host (machine_id, hostname, version, started) VALUES (?, ?, ?, ?)";
         let update_sql = "UPDATE host SET hostname = ?, version = ?, started = ? WHERE machine_id = ?";
@@ -20,7 +22,7 @@ impl Db {
                     self.machine_id.clone(),
                     self.hostname.clone(),
                     version.clone(),
-                    now,
+                    boot_time,
                 ),
             )
             .await?;
@@ -30,7 +32,7 @@ impl Db {
                 (
                     self.hostname.clone(),
                     version.clone(),
-                    now,
+                    boot_time,
                     self.machine_id.clone(),
                 ),
             )

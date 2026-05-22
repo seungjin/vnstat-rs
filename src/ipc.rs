@@ -43,6 +43,9 @@ pub enum IpcRequest {
         filter_type: Option<u8>,
         active_only: bool,
     },
+    Update {
+        interface: Option<String>,
+    },
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
