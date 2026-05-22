@@ -1,0 +1,77 @@
+# vnstat-rs Design Document
+
+This document outlines the architectural and programming design of `vnstat-rs`.
+
+## Architecture Overview
+
+`vnstat-rs` follows a classic daemon-client architecture but extends it for modern, distributed environments.
+
+### Core Components
+
+1.  **`vnstatd-rs` (The Daemon)**:
+    *   **Collection**: Periodically reads `/proc/net/dev` to gather raw interface statistics.
+    *   **Processing**: Calculates deltas (incremental usage) by comparing current counters with the last known state in the database.
+    *   **Persistence**: Saves processed data to a local Libsql (SQLite) database.
+    *   **Synchronization**: Optionally pushes local data to a remote Turso database.
+    *   **IPC Server**: Listens on a Unix Domain Socket to serve requests from the CLI client.
+
+2.  **`vnstat-rs` (The CLI Client)**:
+    *   **Querying**: Requests statistics from the daemon via IPC.
+    *   **Failover**: If the daemon is not running, it falls back to reading the local database directly.
+    *   **Formatting**: Renders statistics in human-readable tables, JSON, or XML.
+
+## Data Model & Persistence
+
+### Hybrid Storage (Libsql + Turso)
+The project uses `libsql` as its primary storage engine. This provides:
+*   **Local Reliability**: Full SQLite compatibility for local edge storage.
+*   **Cloud Sync**: Native ability to synchronize with Turso for centralized monitoring of multiple nodes.
+
+### Unique Identification
+Unlike the original vnStat which often relies on interface names, `vnstat-rs` uses a multi-layered identification strategy to support distributed environments:
+*   **Host**: Identified by the system's `machine-id` (`/etc/machine-id`). This ensures statistics follow the machine even if the hostname changes.
+*   **Interface**: Identified by MAC address where possible, falling back to name.
+
+### Database Schema
+The database uses a resolution-tiered approach:
+*   `fiveminute`: 5-minute raw resolution.
+*   `hour`: Hourly aggregates.
+*   `day`: Daily aggregates.
+*   `month`: Monthly aggregates.
+*   `year`: Yearly aggregates.
+*   `top`: Historical high-usage days.
+
+## Key Algorithms
+
+### Delta Calculation & Reboot Detection
+To ensure accuracy, the daemon must distinguish between a simple counter reset (due to reboot) and a counter rollover (due to 32-bit or 64-bit limits).
+
+1.  **Normal Flow**: `delta = current - last` (if `current >= last`).
+2.  **Decrease Detection**: If `current < last`:
+    *   Check system uptime via `/proc/uptime`.
+    *   Calculate the actual system boot time.
+    *   If the boot time has shifted significantly since the last update, the counter decrease is treated as a **reset** (`delta = current`).
+    *   Otherwise, it is treated as a **rollover** (either 32-bit or 64-bit) based on whether the resulting delta exceeds the configured `MaxBandwidth`.
+
+### Delegated Updates
+To prevent race conditions where multiple processes (e.g., the daemon and a manual `vnstat-rs -u` call) attempt to write to the database simultaneously:
+*   The CLI client first checks for a running daemon.
+*   If found, it sends an `Update` IPC request.
+*   The daemon performs the update and responds, ensuring a single owner for write operations.
+
+## Networking & IPC
+
+### Unix Domain Sockets
+Communication between the client and daemon uses JSON-serialized `IpcRequest` and `IpcResponse` enums over a Unix Domain Socket. This provides a type-safe and performant local API.
+
+### Interface Filtering
+The system categorizes interfaces into **Physical** (Ethernet, WiFi, Mobile) and **Virtual** (VPN, Bridge, Docker).
+*   **Logic**: Uses `/sys/class/net/<iface>/device` presence to identify physical hardware.
+*   **Defaults**: Summary views default to physical interfaces to avoid "double-counting" traffic that passes through both a physical wire and a virtual tunnel or bridge.
+
+## Distributed Design (Turso)
+When remote synchronization is enabled:
+*   Local updates are performed first.
+*   The daemon periodically synchronizes local changes to the remote Turso instance.
+*   The remote schema mirrors the local one but aggregates data from all reporting `machine-id`s.
+*   The client can use `--all-hosts` to query the remote database for a unified view of the entire infrastructure.
