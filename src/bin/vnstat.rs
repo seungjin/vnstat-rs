@@ -556,7 +556,7 @@ async fn main() -> Result<()> {
         PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
 
     let filter_type: Option<u8> =
-        if cli.only_physical { Some(0) } else { None };
+        if cli.only_physical { Some(254) } else { None };
 
     let file_config = if let Some(ref path) = cli.config {
         let expanded_path = vnstat_rs::expand_tilde(path);

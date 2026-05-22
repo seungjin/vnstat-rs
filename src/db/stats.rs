@@ -533,7 +533,11 @@ impl Db {
         }
 
         if let Some(t) = filter_type {
-            ifaces_query.push_str(&format!(" AND i.interface_type = {} ", t));
+            match t {
+                254 => ifaces_query.push_str(" AND i.interface_type < 100"),
+                255 => ifaces_query.push_str(" AND i.interface_type >= 100"),
+                _ => ifaces_query.push_str(&format!(" AND i.interface_type = {}", t)),
+            }
         }
 
         if active_only {
@@ -602,7 +606,11 @@ impl Db {
         }
 
         if let Some(t) = filter_type {
-            ifaces_query.push_str(&format!(" AND i.interface_type = {}", t));
+            match t {
+                254 => ifaces_query.push_str(" AND i.interface_type < 100"),
+                255 => ifaces_query.push_str(" AND i.interface_type >= 100"),
+                _ => ifaces_query.push_str(&format!(" AND i.interface_type = {}", t)),
+            }
         }
 
         if active_only {
@@ -627,9 +635,9 @@ impl Db {
             // Determine if we can aggregate from a smaller unit for better local accuracy
             let (source_table, group_by_table) = match table {
                 "hour" => ("fiveminute", true),
-                "day" => ("hour", true),
-                "month" => ("day", true),
-                "year" => ("day", true),
+                "day" => ("day", false),
+                "month" => ("month", false),
+                "year" => ("year", false),
                 _ => (table, false), // No aggregation for fiveminute or top
             };
 
@@ -805,7 +813,11 @@ impl Db {
         }
 
         if let Some(t) = filter_type {
-            ifaces_query.push_str(&format!(" AND i.interface_type = {}", t));
+            match t {
+                254 => ifaces_query.push_str(" AND i.interface_type < 100"),
+                255 => ifaces_query.push_str(" AND i.interface_type >= 100"),
+                _ => ifaces_query.push_str(&format!(" AND i.interface_type = {}", t)),
+            }
         }
 
         if active_only {
@@ -987,7 +999,11 @@ impl Db {
             ));
         }
         if let Some(t) = filter_type {
-            iface_query.push_str(&format!(" AND i.interface_type = {}", t));
+            match t {
+                254 => iface_query.push_str(" AND i.interface_type < 100"),
+                255 => iface_query.push_str(" AND i.interface_type >= 100"),
+                _ => iface_query.push_str(&format!(" AND i.interface_type = {}", t)),
+            }
         }
 
         if active_only {
