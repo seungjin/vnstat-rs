@@ -6,6 +6,7 @@ use crate::utils::parse_net_dev;
 use anyhow::Result;
 use chrono::{Datelike, Local, TimeZone, Timelike, Utc};
 use libsql::params;
+use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl Db {
@@ -354,15 +355,7 @@ impl Db {
             }
         }
 
-        let mut host_rows = self.local_conn.query(
-            "SELECT started FROM host WHERE machine_id = ?",
-            [self.machine_id.clone()]
-        ).await?;
-        let db_boot_time: i64 = if let Some(row) = host_rows.next().await? {
-            row.get(0)?
-        } else {
-            0
-        };
+        let db_boot_time = self.old_boot_time.load(Ordering::SeqCst);
 
         let now_ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
         let current_uptime = crate::utils::get_uptime().unwrap_or(0) as i64;
@@ -372,8 +365,8 @@ impl Db {
         
         if rebooted {
              println!("Reboot detected (boot time changed from {} to {}). Treating counter decreases as resets.", db_boot_time, current_boot_time);
-             // Update the boot time in DB
-             let _ = self.get_or_create_host().await;
+             // Update old_boot_time in memory so we don't trigger this again in the same process
+             self.old_boot_time.store(current_boot_time, Ordering::SeqCst);
         }
 
         let stats = parse_net_dev()?;

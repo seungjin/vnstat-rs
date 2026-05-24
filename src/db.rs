@@ -9,12 +9,15 @@ pub mod interface;
 pub mod migrations;
 pub mod stats;
 
+use std::sync::atomic::{AtomicI64, Ordering};
+
 pub struct Db {
     pub local_conn: Connection,
     pub remote_conn: Option<Connection>,
     pub hostname: String,
     pub machine_id: String,
     pub host_id: i64,
+    pub old_boot_time: AtomicI64,
 }
 
 impl Db {
@@ -84,6 +87,7 @@ impl Db {
             hostname,
             machine_id,
             host_id: 0,
+            old_boot_time: AtomicI64::new(0),
         })
     }
 
@@ -96,7 +100,9 @@ impl Db {
         let mut db_obj =
             Self::connect(path, url, token, hostname_override).await?;
         db_obj.init_schema().await?;
-        db_obj.host_id = db_obj.get_or_create_host().await?;
+        let (host_id, old_boot_time) = db_obj.get_or_create_host().await?;
+        db_obj.host_id = host_id;
+        db_obj.old_boot_time.store(old_boot_time, Ordering::SeqCst);
         Ok(db_obj)
     }
 

@@ -230,7 +230,7 @@ pub fn print_history_table(
             let (label_header, separator_indent) = match table {
                 "hour" => ("         hour        rx      ", 5),
                 "fiveminute" => ("         time        rx      ", 5),
-                "day" => ("          day         rx      ", 5),
+                "day" => ("          day        rx      ", 5),
                 "month" => ("        month        rx      ", 5),
                 "year" => ("          year        rx      ", 5),
                 _ => ("          date        rx      ", 5),
@@ -447,6 +447,9 @@ pub fn print_history_table(
                         let total_str = format_bytes_short(est_total);
                         let label = "estimated";
 
+                        let rate_bits = (est_total * 8) as f64 / total_secs;
+                        let rate_str = format_rate(rate_bits);
+
                         let label_part = match table {
                             "hour" | "fiveminute" => {
                                 format!("         {:<6}{:>13} ", label, rx_str)
@@ -465,10 +468,17 @@ pub fn print_history_table(
                             _ => format!("     {:<16} {:>10} ", label, rx_str),
                         };
 
-                        println!(
-                            "{}|  {:>10} |  {:>10} |",
-                            label_part, tx_str, total_str
-                        );
+                        if table == "hour" || table == "fiveminute" {
+                            println!(
+                                "{}|  {:>10} |  {:>10} |  {:>13}",
+                                label_part, tx_str, total_str, rate_str
+                            );
+                        } else {
+                            println!(
+                                "{}|  {:>10} |  {:>10} |    {:>11}",
+                                label_part, tx_str, total_str, rate_str
+                            );
+                        }
                     }
                 }
             }

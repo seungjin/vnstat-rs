@@ -2,7 +2,7 @@ use crate::db::Db;
 use anyhow::Result;
 
 impl Db {
-    pub async fn get_or_create_host(&self) -> Result<i64> {
+    pub async fn get_or_create_host(&self) -> Result<(i64, i64)> {
         let version =
             format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
         let now = std::time::SystemTime::now()
@@ -11,6 +11,20 @@ impl Db {
             .as_secs() as i64;
         let uptime = crate::utils::get_uptime().unwrap_or(0);
         let boot_time = now - uptime as i64;
+
+        // Get old boot time before updating
+        let mut rows = self
+            .local_conn
+            .query(
+                "SELECT started FROM host WHERE machine_id = ?",
+                [self.machine_id.clone()],
+            )
+            .await?;
+        let old_boot_time = if let Some(row) = rows.next().await? {
+            row.get(0)?
+        } else {
+            0
+        };
 
         let insert_sql = "INSERT OR IGNORE INTO host (machine_id, hostname, version, started) VALUES (?, ?, ?, ?)";
         let update_sql = "UPDATE host SET hostname = ?, version = ?, started = ? WHERE machine_id = ?";
@@ -63,7 +77,7 @@ impl Db {
                         self.machine_id.clone(),
                         self.hostname.clone(),
                         version,
-                        now,
+                        boot_time,
                     ),
                 )
                 .await
@@ -72,7 +86,7 @@ impl Db {
             }
         }
 
-        Ok(host_id)
+        Ok((host_id, old_boot_time))
     }
 
     pub async fn get_all_hosts(
