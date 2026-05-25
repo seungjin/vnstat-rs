@@ -45,10 +45,10 @@ A network traffic monitor for Linux that keeps a log of network traffic for the 
 It uses the network interface statistics provided by the kernel as information source.
 This version is written in Rust and uses libsql for data storage."""
 assets = [
-    ["vnstat-rs", "usr/bin/vnstat-rs", "755"],
-    ["vnstatd-rs", "usr/bin/vnstatd-rs", "755"],
+    ["target/release/vnstat-rs", "usr/bin/vnstat-rs", "755"],
+    ["target/release/vnstatd-rs", "usr/bin/vnstatd-rs", "755"],
     ["vnstatd-rs.service", "lib/systemd/system/vnstatd-rs.service", "644"],
-    ["vnstat-rs.conf-sample", "etc/vnstat-rs.conf", "644"],
+    ["vnstat-rs.conf-sample", "etc/vnstat-rs/vnstat-rs.conf", "644"],
 ]
 maintainer-scripts = "debian"
 

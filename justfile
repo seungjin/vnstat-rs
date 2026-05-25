@@ -91,6 +91,11 @@ rpm:
     cargo build --release
     cargo generate-rpm
 
+# Generate Debian package
+deb:
+    cargo build --release
+    cargo deb
+
 myservers:
     rsync -avhz target/release/{vnstatd-rs,vnstat-rs} 0.z:~/.local/bin/
     ssh 0.z "sudo mv ~/.local/bin/{vnstatd-rs,vnstat-rs} /usr/local/bin && sudo chown root:root /usr/local/bin/{vnstatd-rs,vnstat-rs}"
