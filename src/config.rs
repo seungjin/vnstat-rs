@@ -144,11 +144,14 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
 
     if config.daemon_socket.is_none() {
         let var_lib_socket = PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.sock");
+        let run_dir_socket = PathBuf::from("/run/vnstat-rs/vnstat-rs.sock");
         let run = PathBuf::from("/run/vnstat-rs.sock");
         let var_run = PathBuf::from("/var/run/vnstat-rs.sock");
         
         if is_root {
             config.daemon_socket = Some(run);
+        } else if run_dir_socket.exists() {
+            config.daemon_socket = Some(run_dir_socket);
         } else if var_lib_socket.exists() {
             config.daemon_socket = Some(var_lib_socket);
         } else if run.exists() {
@@ -196,8 +199,11 @@ pub fn get_default_config(is_root: bool) -> Config {
     }
 
     let var_lib_socket = PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.sock");
+    let run_dir_socket = PathBuf::from("/run/vnstat-rs/vnstat-rs.sock");
     if run.exists() || is_root {
         config.daemon_socket = Some(run);
+    } else if run_dir_socket.exists() {
+        config.daemon_socket = Some(run_dir_socket);
     } else if var_lib_socket.exists() {
         config.daemon_socket = Some(var_lib_socket);
     } else {

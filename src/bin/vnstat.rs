@@ -606,6 +606,7 @@ async fn main() -> Result<()> {
 
     // Add common fallbacks
     let fallbacks = [
+        "/run/vnstat-rs/vnstat-rs.sock",
         "/run/vnstat-rs.sock",
         "/var/run/vnstat-rs.sock",
         "/var/lib/vnstat-rs/vnstat-rs.sock",
