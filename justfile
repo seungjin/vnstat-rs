@@ -86,6 +86,11 @@ clean:
 test:
     cargo test
 
+# Generate RPM package
+rpm:
+    cargo build --release
+    cargo generate-rpm
+
 myservers:
     rsync -avhz target/release/{vnstatd-rs,vnstat-rs} 0.z:~/.local/bin/
     ssh 0.z "sudo mv ~/.local/bin/{vnstatd-rs,vnstat-rs} /usr/local/bin && sudo chown root:root /usr/local/bin/{vnstatd-rs,vnstat-rs}"
