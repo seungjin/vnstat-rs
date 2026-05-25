@@ -220,7 +220,7 @@ struct Cli {
     all_hosts: bool,
 
     /// Show all interfaces (including inactive ones)
-    #[arg(long)]
+    #[arg(short = 'a', long)]
     all_interfaces: bool,
 
     /// List all hosts in database
@@ -549,19 +549,6 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    let is_root = unsafe { libc::getuid() == 0 };
-    let etc_config = PathBuf::from("/etc/vnstat-rs/vnstat-rs.conf");
-    let home = std::env::var("HOME").unwrap_or_default();
-    let user_config =
-        PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
-
-    let active_only = !cli.all_interfaces;
-    let filter_type: Option<u8> = if cli.only_physical || (cli.iface.is_none() && !cli.all_interfaces) {
-        Some(254) // Default to physical unless all interfaces or specific interface requested
-    } else {
-        None
-    };
-
     let file_config = if let Some(ref path) = cli.config {
         let expanded_path = vnstat_rs::expand_tilde(path);
         match vnstat_rs::load_config(&expanded_path) {
@@ -576,25 +563,14 @@ async fn main() -> Result<()> {
             }
         }
     } else {
-        match vnstat_rs::load_config(&etc_config) {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                match vnstat_rs::load_config(&user_config) {
-                    Ok(c) => c,
-                    Err(_) => vnstat_rs::get_default_config(is_root),
-                }
-            }
-            Err(_) => {
-                if !is_root {
-                    match vnstat_rs::load_config(&user_config) {
-                        Ok(c) => c,
-                        Err(_) => vnstat_rs::get_default_config(is_root),
-                    }
-                } else {
-                    vnstat_rs::get_default_config(is_root)
-                }
-            }
-        }
+        vnstat_rs::load_best_config()
+    };
+
+    let active_only = !cli.all_interfaces;
+    let filter_type: Option<u8> = if cli.only_physical || (cli.iface.is_none() && !cli.all_interfaces) {
+        Some(254) // Default to physical unless all interfaces or specific interface requested
+    } else {
+        None
     };
 
     // Determine output format
@@ -623,103 +599,130 @@ async fn main() -> Result<()> {
     };
 
     // Try to talk to daemon first
+    let mut tried_paths = Vec::new();
     if let Some(ref socket_path) = file_config.daemon_socket {
-        if socket_path.exists() {
-            let mut requested_table = String::new();
-            let mut requested_limit = 0;
-            let req = if cli.add.is_some()
-                || cli.remove.is_some()
-                || cli.rename.is_some()
-                || cli.setalias.is_some()
-            {
-                None
-            } else if cli.info {
-                Some(IpcRequest::GetInfo)
-            } else if cli.host_list {
-                Some(IpcRequest::ListHosts {
-                    host: cli.host.clone(),
-                })
-            } else if cli.hoursgraph {
-                Some(IpcRequest::GetHistory {
-                    table: "hour".to_string(),
-                    interface: cli.iface.clone(),
-                    host: host_filter_ipc.clone(),
-                    filter_type,
-                    active_only,
-                    limit: 24,
-                    begin: None,
-                    end: None,
-                })
-            } else if cli.nintyfifth {
-                Some(IpcRequest::Get95th {
-                    interface: cli.iface.clone(),
-                    host: host_filter_ipc.clone(),
-                    filter_type,
-                    active_only,
-                })
-            } else if cli.fiveminutes.is_some()
-                || cli.hours.is_some()
-                || cli.days.is_some()
-                || cli.months.is_some()
-                || cli.years.is_some()
-                || cli.top.is_some()
-            {
-                let (table, default_limit) = if let Some(l) = cli.fiveminutes {
-                    ("fiveminute", l.unwrap_or(24))
-                } else if let Some(l) = cli.hours {
-                    ("hour", l.unwrap_or(24))
-                } else if let Some(l) = cli.days {
-                    ("day", l.unwrap_or(30))
-                } else if let Some(l) = cli.months {
-                    ("month", l.unwrap_or(12))
-                } else if let Some(l) = cli.years {
-                    ("year", l.unwrap_or(10))
-                } else {
-                    ("top", cli.top.unwrap().unwrap_or(10))
-                };
+        tried_paths.push(socket_path.clone());
+    }
 
-                requested_table = table.to_string();
-                let limit = cli.limit.unwrap_or(default_limit);
-                requested_limit = limit;
-                let begin = cli.begin.as_deref().and_then(parse_date_arg);
-                let end = cli.end.as_deref().and_then(parse_date_arg);
+    // Add common fallbacks
+    let fallbacks = [
+        "/run/vnstat-rs.sock",
+        "/var/run/vnstat-rs.sock",
+        "/var/lib/vnstat-rs/vnstat-rs.sock",
+    ];
+    for f in fallbacks {
+        let p = PathBuf::from(f);
+        if !tried_paths.contains(&p) {
+            tried_paths.push(p);
+        }
+    }
 
-                Some(IpcRequest::GetHistory {
-                    table: table.to_string(),
-                    interface: cli.iface.clone(),
-                    host: host_filter_ipc.clone(),
-                    filter_type,
-                    active_only,
-                    limit,
-                    begin,
-                    end,
-                })
-            } else if cli.update {
-                Some(IpcRequest::Update {
-                    interface: cli.iface.clone(),
-                })
-            } else if !cli.update && !cli.init && !cli.iflist {
-                if matches!(format, OutputFormat::Table) {
-                    Some(IpcRequest::GetSummary {
-                        interface: cli.iface.clone(),
-                        host: host_filter_ipc.clone(),
-                        filter_type,
-                        active_only,
-                    })
-                } else {
-                    Some(IpcRequest::GetStats {
-                        interface: cli.iface.clone(),
-                        host: host_filter_ipc.clone(),
-                        filter_type,
-                        active_only,
-                    })
-                }
-            } else {
-                None
-            };
+    // Add user fallback
+    if let Ok(home) = std::env::var("HOME") {
+        let p = PathBuf::from(home).join(".local/share/vnstat-rs/vnstat-rs.sock");
+        if !tried_paths.contains(&p) {
+            tried_paths.push(p);
+        }
+    }
 
-            if let Some(req) = req {
-                match request_daemon(socket_path, req).await {
+    let mut requested_table = String::new();
+    let mut requested_limit = 0;
+
+    let req = if cli.add.is_some()
+        || cli.remove.is_some()
+        || cli.rename.is_some()
+        || cli.setalias.is_some()
+    {
+        None
+    } else if cli.info {
+        Some(IpcRequest::GetInfo)
+    } else if cli.host_list {
+        Some(IpcRequest::ListHosts {
+            host: cli.host.clone(),
+        })
+    } else if cli.hoursgraph {
+        Some(IpcRequest::GetHistory {
+            table: "hour".to_string(),
+            interface: cli.iface.clone(),
+            host: host_filter_ipc.clone(),
+            filter_type,
+            active_only,
+            limit: 24,
+            begin: None,
+            end: None,
+        })
+    } else if cli.nintyfifth {
+        Some(IpcRequest::Get95th {
+            interface: cli.iface.clone(),
+            host: host_filter_ipc.clone(),
+            filter_type,
+            active_only,
+        })
+    } else if cli.fiveminutes.is_some()
+        || cli.hours.is_some()
+        || cli.days.is_some()
+        || cli.months.is_some()
+        || cli.years.is_some()
+        || cli.top.is_some()
+    {
+        let (table, default_limit) = if let Some(l) = cli.fiveminutes {
+            ("fiveminute", l.unwrap_or(24))
+        } else if let Some(l) = cli.hours {
+            ("hour", l.unwrap_or(24))
+        } else if let Some(l) = cli.days {
+            ("day", l.unwrap_or(30))
+        } else if let Some(l) = cli.months {
+            ("month", l.unwrap_or(12))
+        } else if let Some(l) = cli.years {
+            ("year", l.unwrap_or(10))
+        } else {
+            ("top", cli.top.unwrap().unwrap_or(10))
+        };
+
+        requested_table = table.to_string();
+        let limit = cli.limit.unwrap_or(default_limit);
+        requested_limit = limit;
+        let begin = cli.begin.as_deref().and_then(parse_date_arg);
+        let end = cli.end.as_deref().and_then(parse_date_arg);
+
+        Some(IpcRequest::GetHistory {
+            table: table.to_string(),
+            interface: cli.iface.clone(),
+            host: host_filter_ipc.clone(),
+            filter_type,
+            active_only,
+            limit,
+            begin,
+            end,
+        })
+    } else if cli.update {
+        Some(IpcRequest::Update {
+            interface: cli.iface.clone(),
+        })
+    } else if !cli.update && !cli.init && !cli.iflist {
+        if matches!(format, OutputFormat::Table) {
+            Some(IpcRequest::GetSummary {
+                interface: cli.iface.clone(),
+                host: host_filter_ipc.clone(),
+                filter_type,
+                active_only,
+            })
+        } else {
+            Some(IpcRequest::GetStats {
+                interface: cli.iface.clone(),
+                host: host_filter_ipc.clone(),
+                filter_type,
+                active_only,
+            })
+        }
+    } else {
+        None
+    };
+
+    if let Some(req) = req {
+        for socket_path in tried_paths {
+            if socket_path.exists() {
+                match request_daemon(&socket_path, req.clone()).await {
                     Ok(IpcResponse::Stats {
                         mut stats,
                         load_average,
@@ -858,25 +861,23 @@ async fn main() -> Result<()> {
                     }
                     Ok(IpcResponse::Error(e)) => {
                         eprintln!("Daemon error: {}", e);
+                        return Ok(()); // Or continue? If daemon replied with error, it's alive.
                     }
                     Err(e) => {
-                        eprintln!(
-                            "vnstatd is not working ({:?}): {}",
-                            socket_path, e
-                        );
+                        // Continue to next socket path if this one failed
+                        // But if it's permission denied, we might want to warn
+                        if e.to_string().contains("Permission denied") {
+                             eprintln!("Warning: Permission denied connecting to daemon at {:?}", socket_path);
+                        }
                     }
                     _ => {}
                 }
             }
-        } else {
-            // Socket doesn't exist - if not a purely local command, warn
-            if !cli.update && !cli.init && !cli.iflist {
-                eprintln!(
-                    "vnstatd is not working (socket {:?} not found). Falling back to direct database access.",
-                    socket_path
-                );
-            }
         }
+    }
+
+    if !cli.update && !cli.init && !cli.iflist && !cli.add.is_some() && !cli.remove.is_some() && !cli.rename.is_some() && !cli.setalias.is_some() {
+        eprintln!("vnstatd is not working. Falling back to direct database access.");
     }
 
     let db_path = cli
@@ -891,22 +892,39 @@ async fn main() -> Result<()> {
         (None, None)
     };
 
-    let db = match Db::open(
-        db_path,
-        url,
-        token,
-        file_config.hostname_override.clone(),
-    )
-    .await
-    {
-        Ok(db) => db,
-        Err(e) => {
-            if e.to_string().contains("locked") {
-                return Err(anyhow::anyhow!(
-                    "Database is locked by another process (likely vnStatd-rs).\nTry starting the daemon or stopping it if you want direct access."
-                ));
+    let readonly = !cli.update
+        && !cli.init
+        && cli.add.is_none()
+        && cli.remove.is_none()
+        && cli.rename.is_none()
+        && cli.setalias.is_none();
+
+    let db = if readonly {
+        Db::open_readonly(
+            db_path,
+            url,
+            token,
+            file_config.hostname_override.clone(),
+        )
+        .await?
+    } else {
+        match Db::open(
+            db_path,
+            url,
+            token,
+            file_config.hostname_override.clone(),
+        )
+        .await
+        {
+            Ok(db) => db,
+            Err(e) => {
+                if e.to_string().contains("locked") {
+                    return Err(anyhow::anyhow!(
+                        "Database is locked by another process (likely vnStatd-rs).\nTry starting the daemon or stopping it if you want direct access."
+                    ));
+                }
+                return Err(e);
             }
-            return Err(e);
         }
     };
 

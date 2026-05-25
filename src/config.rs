@@ -22,7 +22,6 @@ pub struct Config {
 }
 
 pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
-    println!("Loading config from {:?}...", path);
     let mut config = Config {
         update_interval: 30,
         sync_interval: 300,
@@ -130,8 +129,9 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
         (None, Some(file)) => Some(expand_tilde(file)),
         (Some(dir), None) => Some(dir.join("vnstat-rs.db")),
         (None, None) => {
-            if is_root {
-                Some(PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"))
+            let var_lib = PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db");
+            if is_root || var_lib.exists() {
+                Some(var_lib)
             } else {
                 let home = std::env::var("HOME").unwrap_or_default();
                 Some(
@@ -143,9 +143,18 @@ pub fn load_config(path: &Path) -> Result<Config, std::io::Error> {
     };
 
     if config.daemon_socket.is_none() {
+        let var_lib_socket = PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.sock");
+        let run = PathBuf::from("/run/vnstat-rs.sock");
+        let var_run = PathBuf::from("/var/run/vnstat-rs.sock");
+        
         if is_root {
-            config.daemon_socket =
-                Some(PathBuf::from("/var/run/vnstat-rs.sock"));
+            config.daemon_socket = Some(run);
+        } else if var_lib_socket.exists() {
+            config.daemon_socket = Some(var_lib_socket);
+        } else if run.exists() {
+            config.daemon_socket = Some(run);
+        } else if var_run.exists() {
+            config.daemon_socket = Some(var_run);
         } else {
             let home = std::env::var("HOME").unwrap_or_default();
             config.daemon_socket = Some(
@@ -173,16 +182,26 @@ pub fn get_default_config(is_root: bool) -> Config {
         ..Default::default()
     };
 
-    if is_root {
-        config.database =
-            Some(PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db"));
-        config.daemon_socket = Some(PathBuf::from("/var/run/vnstat-rs.sock"));
+    let var_lib = PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.db");
+    let run = PathBuf::from("/run/vnstat-rs.sock");
+
+    if var_lib.exists() || is_root {
+        config.database = Some(var_lib);
     } else {
         let home = std::env::var("HOME").unwrap_or_default();
         config.database = Some(
             PathBuf::from(home.clone())
                 .join(".local/share/vnstat-rs/vnstat-rs.db"),
         );
+    }
+
+    let var_lib_socket = PathBuf::from("/var/lib/vnstat-rs/vnstat-rs.sock");
+    if run.exists() || is_root {
+        config.daemon_socket = Some(run);
+    } else if var_lib_socket.exists() {
+        config.daemon_socket = Some(var_lib_socket);
+    } else {
+        let home = std::env::var("HOME").unwrap_or_default();
         config.daemon_socket = Some(
             PathBuf::from(home).join(".local/share/vnstat-rs/vnstat-rs.sock"),
         );
@@ -199,27 +218,26 @@ pub fn load_best_config() -> Config {
         PathBuf::from(home).join(".config/vnstat-rs/vnstat-rs.conf");
     let local_config = PathBuf::from("vnstat-rs.conf");
 
-    // 1. Try /etc/vnstat-rs/vnstat-rs.conf
-    if etc_config.exists() {
-        if let Ok(c) = load_config(&etc_config) {
-            return c;
-        }
-    }
-
-    // 2. Try ~/.config/vnstat-rs/vnstat-rs.conf
-    if user_config.exists() {
-        if let Ok(c) = load_config(&user_config) {
-            return c;
-        }
-    }
-
-    // 3. Try current directory (convenient for testing)
+    // 1. Try current directory (convenient for testing/development)
     if local_config.exists() {
         if let Ok(c) = load_config(&local_config) {
             return c;
         }
     }
 
-    println!("No config file found. Using defaults.");
+    // 2. Try ~/.config/vnstat-rs/vnstat-rs.conf (User override)
+    if user_config.exists() {
+        if let Ok(c) = load_config(&user_config) {
+            return c;
+        }
+    }
+
+    // 3. Try /etc/vnstat-rs/vnstat-rs.conf (System default)
+    if etc_config.exists() {
+        if let Ok(c) = load_config(&etc_config) {
+            return c;
+        }
+    }
+
     get_default_config(is_root)
 }

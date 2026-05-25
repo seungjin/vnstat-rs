@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -190,6 +191,11 @@ async fn main() -> Result<()> {
     }
 
     let listener = UnixListener::bind(&socket_path)?;
+    // Set socket permissions to allow any user to talk to the daemon
+    let mut perms = fs::metadata(&socket_path)?.permissions();
+    perms.set_mode(0o666);
+    fs::set_permissions(&socket_path, perms)?;
+
     let db_ipc = Arc::new(db);
     let db_loop = Arc::clone(&db_ipc);
 

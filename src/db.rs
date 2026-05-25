@@ -106,6 +106,20 @@ impl Db {
         Ok(db_obj)
     }
 
+    pub async fn open_readonly(
+        path: PathBuf,
+        url: Option<String>,
+        token: Option<String>,
+        hostname_override: Option<String>,
+    ) -> Result<Self> {
+        let mut db_obj =
+            Self::connect(path, url, token, hostname_override).await?;
+        let (host_id, old_boot_time) = db_obj.get_host_id_only().await?;
+        db_obj.host_id = host_id;
+        db_obj.old_boot_time.store(old_boot_time, Ordering::SeqCst);
+        Ok(db_obj)
+    }
+
     pub async fn open_no_init(
         path: PathBuf,
         url: Option<String>,

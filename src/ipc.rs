@@ -2,7 +2,7 @@ use crate::models::{
     HistoryEntry, InterfaceStats, NintyFifthData, SummaryData,
 };
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub enum IpcRequest {
     GetStats {
         interface: Option<String>,

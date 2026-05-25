@@ -41,8 +41,8 @@ daemon:
 
 # Install the binaries to ~/.cargo/bin
 install:
-    install -m 755 target/release/vnstat-rs ~/.cargo/bin/vnstat-rs
-    install -m 755 target/release/vnstatd-rs ~/.cargo/bin/vnstatd-rs
+    install -m 755 target/release/vnstat-rs /var/lib/extensions/usrlocal/usr/local/bin 
+    install -m 755 target/release/vnstatd-rs /var/lib/extensions/usrlocal/usr/local/bin
 
 # Install the binaries via cargo
 install-user:

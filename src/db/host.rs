@@ -2,6 +2,23 @@ use crate::db::Db;
 use anyhow::Result;
 
 impl Db {
+    pub async fn get_host_id_only(&self) -> Result<(i64, i64)> {
+        let mut rows = self
+            .local_conn
+            .query(
+                "SELECT id, started FROM host WHERE machine_id = ?",
+                [self.machine_id.clone()],
+            )
+            .await?;
+        if let Some(row) = rows.next().await? {
+            let id: i64 = row.get(0)?;
+            let started: i64 = row.get(1)?;
+            Ok((id, started))
+        } else {
+            Ok((0, 0))
+        }
+    }
+
     pub async fn get_or_create_host(&self) -> Result<(i64, i64)> {
         let version =
             format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
