@@ -43,6 +43,8 @@ daemon:
 install:
     install -m 755 target/release/vnstat-rs /var/lib/extensions/usrlocal/usr/local/bin 
     install -m 755 target/release/vnstatd-rs /var/lib/extensions/usrlocal/usr/local/bin
+    sudo chcon -t bin_t /var/lib/extensions/usrlocal/usr/local/bin/vnstat*
+    sudo systemctl restart systemd-sysext.service
 
 # Install the binaries via cargo
 install-user:
