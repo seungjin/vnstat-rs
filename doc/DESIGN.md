@@ -16,8 +16,8 @@ This document outlines the architectural and programming design of `vnstat-rs`.
     *   **IPC Server**: Listens on a Unix Domain Socket to serve requests from the CLI client.
 
 2.  **`vnstat-rs` (The CLI Client)**:
-    *   **Querying**: Requests statistics from the daemon via IPC.
-    *   **Failover**: If the daemon is not running, it falls back to reading the local database directly.
+    *   **Querying**: Requests statistics from the daemon via IPC. It searches multiple standard locations (e.g., `/run/`, `/var/run/`, `/var/lib/vnstat-rs/`) to find the active daemon.
+    *   **Failover**: If the daemon is not running, it falls back to reading the local database directly. It uses a dedicated **read-only mode** that bypasses schema initialization, allowing non-root users to query the system-wide database if they have read permissions (e.g., via the `vnstat` group).
     *   **Formatting**: Renders statistics in human-readable tables, JSON, or XML.
 
 ## Data Model & Persistence
@@ -63,11 +63,23 @@ To prevent race conditions where multiple processes (e.g., the daemon and a manu
 
 ### Unix Domain Sockets
 Communication between the client and daemon uses JSON-serialized `IpcRequest` and `IpcResponse` enums over a Unix Domain Socket. This provides a type-safe and performant local API.
+*   **Permissions**: The daemon creates the socket with `0666` permissions, allowing non-root users to query the daemon without requiring `sudo` or being part of a specific group (though group-based access to the underlying database is still recommended for fallback scenarios).
+*   **Discovery**: The CLI client performs a multi-path search for the socket, ensuring connectivity even in varied system configurations.
+
+### Configuration Priority
+The application follows a hierarchical configuration loading strategy:
+1.  **Command Line**: `-c` or `--config` flag.
+2.  **Local Environment**: `vnstat-rs.conf` in the current working directory.
+3.  **User Override**: `~/.config/vnstat-rs/vnstat-rs.conf`.
+4.  **System Default**: `/etc/vnstat-rs/vnstat-rs.conf`.
+5.  **Built-in Defaults**: Hardcoded sane defaults if no config files are found.
+
+This hierarchy allows users to override system-wide settings (like `DatabaseDir` or `DaemonSocket`) for their specific environment.
 
 ### Interface Filtering
 The system categorizes interfaces into **Physical** (Ethernet, WiFi, Mobile) and **Virtual** (VPN, Bridge, Docker).
 *   **Logic**: Uses `/sys/class/net/<iface>/device` presence to identify physical hardware.
-*   **Defaults**: Summary views default to physical interfaces to avoid "double-counting" traffic that passes through both a physical wire and a virtual tunnel or bridge.
+*   **Defaults**: Summary views default to physical interfaces to avoid "double-counting" traffic that passes through both a physical wire and a virtual tunnel or bridge. The `-a` or `--all-interfaces` flag can be used to show all data.
 
 ## Distributed Design (Turso)
 When remote synchronization is enabled:
