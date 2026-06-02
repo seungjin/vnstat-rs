@@ -57,14 +57,20 @@ sudo cp target/release/vnstatd-rs /usr/local/bin/
 # Show summary (physical interfaces of current host)
 vnstat-rs
 
-# Show all interfaces (including virtual/docker/lo)
-vnstat-rs -a
+# Show help (use -? or --help)
+vnstat-rs -?
+
+# Show hourly statistics (matches original vnStat behavior)
+vnstat-rs -h
 
 # Show daily statistics
 vnstat-rs -d
 
 # Show monthly statistics
 vnstat-rs -m
+
+# Show all interfaces (including virtual/docker/lo)
+vnstat-rs -a
 
 # Show statistics for all hosts in the remote database
 vnstat-rs --all-hosts
@@ -81,6 +87,33 @@ vnstat-rs -i eth0
 # Update the database (delegates to daemon if running)
 vnstat-rs -u
 ```
+
+## Comparison with Original vnStat
+
+While `vnstat-rs` is designed as a drop-in replacement, there are intentional differences in its architecture and behavior.
+
+### Command-line Interface
+
+- **The `-h` Flag**: Following the legacy of the original C version, **`-h` is used for "Hours"**, not "Help". To see the help message, use `-?` or `--help`.
+- **IEC Units**: `vnstat-rs` strictly follows IEC standard units (KiB, MiB, GiB, TiB) to avoid the ambiguity of "KB" (which can be 1000 or 1024 bytes depending on the tool).
+- **Timezones**: Hourly and summary outputs include timezone suffixes (e.g., `(UTC)`) to ensure clarity in distributed monitoring environments.
+
+### Architecture
+
+| Feature | Original vnStat (C) | vnstat-rs (Rust) |
+| :--- | :--- | :--- |
+| **Database** | Custom binary format | SQLite / Libsql |
+| **Identification** | Interface Name | MAC Address + Machine ID |
+| **Concurrency** | File locking | IPC Delegation + SQLite ACID |
+| **Remote Sync** | Not native (requires script) | Native (Libsql/Turso) |
+| **Virtual Ifaces** | Manual configuration | Auto-detection & Smart filtering |
+
+### Accuracy and Performance
+
+`vnstat-rs` utilizes the same kernel source (`/proc/net/dev`) as the original, ensuring data parity. The use of Rust and Libsql provides:
+1. **Safety**: Memory safety and overflow protection for high-speed (Tbit/s) counters.
+2. **Reliability**: Atomic database transactions prevent data corruption during power failures.
+3. **Efficiency**: Multi-threaded daemon for simultaneous local collection and remote synchronization.
 
 ### vnstatd-rs (Daemon)
 

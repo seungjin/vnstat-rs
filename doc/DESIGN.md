@@ -19,6 +19,7 @@ This document outlines the architectural and programming design of `vnstat-rs`.
     *   **Querying**: Requests statistics from the daemon via IPC. It searches multiple standard locations (e.g., `/run/`, `/var/run/`, `/var/lib/vnstat-rs/`) to find the active daemon.
     *   **Failover**: If the daemon is not running, it falls back to reading the local database directly. It uses a dedicated **read-only mode** that bypasses schema initialization, allowing non-root users to query the system-wide database if they have read permissions (e.g., via the `vnstat` group).
     *   **Formatting**: Renders statistics in human-readable tables, JSON, or XML.
+    *   **Compatibility**: Maintains strict command-line argument compatibility with the original vnStat (e.g., using `-h` for hourly statistics instead of help) to ensure a seamless transition for existing users and scripts.
 
 ## Data Model & Persistence
 
