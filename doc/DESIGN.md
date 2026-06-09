@@ -44,6 +44,13 @@ The database uses a resolution-tiered approach:
 
 ## Key Algorithms
 
+### Average Rate Calculation
+For historical periods (e.g., yesterday, last month), the average rate is calculated by dividing the total traffic by the full duration of the period.
+
+For **active periods** (e.g., today, this month, current hour), `vnstat-rs` matches the behavior of the original vnStat:
+*   The average rate is calculated using the **elapsed time** since the period started.
+*   This provides a real-time average that reflects actual usage so far, rather than an average spread over the entire future duration of the period.
+
 ### Delta Calculation & Reboot Detection
 To ensure accuracy, the daemon must distinguish between a simple counter reset (due to reboot) and a counter rollover (due to 32-bit or 64-bit limits).
 
