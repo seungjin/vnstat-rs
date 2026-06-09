@@ -272,42 +272,62 @@ pub fn print_history_table(
                 };
 
                 let total = entry.rx + entry.tx;
-                let seconds = match table {
-                    "fiveminute" => 300,
-                    "hour" => 3600,
-                    "day" => 86400,
+
+                let is_current = match table {
+                    "fiveminute" => {
+                        dt.timestamp() <= now_ts && dt.timestamp() + 300 > now_ts
+                    }
+                    "hour" => {
+                        dt.timestamp() <= now_ts && dt.timestamp() + 3600 > now_ts
+                    }
+                    "day" => dt.date_naive() == now.date_naive(),
                     "month" => {
-                        let year = dt.year();
-                        let month = dt.month();
-                        let days = match month {
-                            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-                            4 | 6 | 9 | 11 => 30,
-                            2 => {
-                                if (year % 4 == 0 && year % 100 != 0)
-                                    || (year % 400 == 0)
-                                {
-                                    29
-                                } else {
-                                    28
-                                }
-                            }
-                            _ => 30,
-                        };
-                        days * 86400
+                        dt.year() == now.year() && dt.month() == now.month()
                     }
-                    "year" => {
-                        if (dt.year() % 4 == 0 && dt.year() % 100 != 0)
-                            || (dt.year() % 400 == 0)
-                        {
-                            366 * 86400
-                        } else {
-                            365 * 86400
-                        }
-                    }
-                    _ => 86400,
+                    "year" => dt.year() == now.year(),
+                    _ => false,
                 };
 
-                let rate_bits = (total * 8) as f64 / seconds as f64;
+                let seconds = if is_current {
+                    (now_ts - dt.timestamp()).max(1) as f64
+                } else {
+                    match table {
+                        "fiveminute" => 300.0,
+                        "hour" => 3600.0,
+                        "day" => 86400.0,
+                        "month" => {
+                            let year = dt.year();
+                            let month = dt.month();
+                            let days = match month {
+                                1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+                                4 | 6 | 9 | 11 => 30,
+                                2 => {
+                                    if (year % 4 == 0 && year % 100 != 0)
+                                        || (year % 400 == 0)
+                                    {
+                                        29
+                                    } else {
+                                        28
+                                    }
+                                }
+                                _ => 30,
+                            };
+                            (days * 86400) as f64
+                        }
+                        "year" => {
+                            if (dt.year() % 4 == 0 && dt.year() % 100 != 0)
+                                || (dt.year() % 400 == 0)
+                            {
+                                (366 * 86400) as f64
+                            } else {
+                                (365 * 86400) as f64
+                            }
+                        }
+                        _ => 86400.0,
+                    }
+                };
+
+                let rate_bits = (total * 8) as f64 / seconds;
                 let rate_str = format_rate(rate_bits);
 
                 let rx_str = format_bytes_short(entry.rx);
@@ -364,26 +384,8 @@ pub fn print_history_table(
 
                 if is_current {
                     let (secs_passed, total_secs) = match table {
-                        "day" => {
-                            let today_start =
-                                now.date_naive().and_hms_opt(0, 0, 0).unwrap();
-                            let start_ts = Local
-                                .from_local_datetime(&today_start)
-                                .unwrap()
-                                .timestamp();
-                            ((now_ts - start_ts).max(1) as f64, 86400.0)
-                        }
+                        "day" => ((now_ts - dt.timestamp()).max(1) as f64, 86400.0),
                         "month" => {
-                            let month_start = now
-                                .date_naive()
-                                .with_day(1)
-                                .unwrap()
-                                .and_hms_opt(0, 0, 0)
-                                .unwrap();
-                            let start_ts = Local
-                                .from_local_datetime(&month_start)
-                                .unwrap()
-                                .timestamp();
                             let days = match now.month() {
                                 1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
                                 4 | 6 | 9 | 11 => 30,
@@ -400,23 +402,11 @@ pub fn print_history_table(
                                 _ => 30,
                             };
                             (
-                                (now_ts - start_ts).max(1) as f64,
+                                (now_ts - dt.timestamp()).max(1) as f64,
                                 (days * 86400) as f64,
                             )
                         }
                         "year" => {
-                            let year_start = now
-                                .date_naive()
-                                .with_month(1)
-                                .unwrap()
-                                .with_day(1)
-                                .unwrap()
-                                .and_hms_opt(0, 0, 0)
-                                .unwrap();
-                            let start_ts = Local
-                                .from_local_datetime(&year_start)
-                                .unwrap()
-                                .timestamp();
                             let days = if (now.year() % 4 == 0
                                 && now.year() % 100 != 0)
                                 || (now.year() % 400 == 0)
@@ -426,7 +416,7 @@ pub fn print_history_table(
                                 365
                             };
                             (
-                                (now_ts - start_ts).max(1) as f64,
+                                (now_ts - dt.timestamp()).max(1) as f64,
                                 (days * 86400) as f64,
                             )
                         }
